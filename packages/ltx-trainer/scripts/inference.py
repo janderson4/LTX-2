@@ -28,10 +28,12 @@ Usage:
 
 import argparse
 import re
+import sys
 from pathlib import Path
 
 import torch
 import torchaudio
+from accelerate import Accelerator, DistributedType
 from peft import LoraConfig, get_peft_model, set_peft_model_state_dict
 from safetensors.torch import load_file
 from torchvision import transforms
@@ -275,28 +277,45 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         "--device",
         type=str,
         default="cuda",
-        help="Device to run on (cuda/cpu)",
+        help="Device to run on (cuda/cpu). Ignored when running with 'accelerate launch'.",
+    )
+    parser.add_argument(
+        "--load-in-8bit",
+        action="store_true",
+        help="Load Gemma text encoder in 8-bit mode (saves VRAM, requires bitsandbytes)",
     )
 
+    args = accelerator_placeholder_args = parser.parse_known_args()[0]
+    # Re-parse with full help if needed, but we need accelerator first for some logic
     args = parser.parse_args()
+
+    # Initialize Accelerator
+    accelerator = Accelerator()
+    is_main_process = accelerator.is_main_process
+    device = accelerator.device
 
     # Validate conditioning arguments
     if args.include_reference_in_output and args.reference_video is None:
-        parser.error("--include-reference-in-output requires --reference-video")
+        if is_main_process:
+            parser.error("--include-reference-in-output requires --reference-video")
+        else:
+            sys.exit(1)
 
     # Validate arguments
     generate_audio = not args.skip_audio
 
-    print("=" * 80)
-    print("LTX Video/Audio Generation")
-    print("=" * 80)
+    if is_main_process:
+        print("=" * 80)
+        print("LTX Video/Audio Generation (Distributed)")
+        print(f"Running on {accelerator.num_processes} process(es) on {accelerator.device}")
+        print("=" * 80)
 
     # Determine if we need VAE encoder (for image or video conditioning)
     need_vae_encoder = args.condition_image is not None or args.reference_video is not None
 
     components = load_model(
         checkpoint_path=args.checkpoint,
-        device="cpu",  # Load to CPU first, sampler will move to device as needed
+        device="cpu",  # Load to CPU first, then prepare with accelerator
         dtype=torch.bfloat16,
         with_video_vae_encoder=need_vae_encoder,
         with_video_vae_decoder=True,
@@ -304,6 +323,7 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         with_vocoder=generate_audio,
         with_text_encoder=True,
         text_encoder_path=args.text_encoder_path,
+        load_text_encoder_in_8bit=args.load_in_8bit,
     )
 
     # Apply LoRA weights if provided
@@ -311,60 +331,73 @@ def main() -> None:  # noqa: PLR0912, PLR0915
     if args.lora_path is not None:
         transformer = load_lora_weights(transformer, args.lora_path)
 
+    # Prepare transformer for distributed inference (sharding across GPUs)
+    # This is where "parallel on all gpus" happens for the heavy transformer
+    transformer = accelerator.prepare(transformer)
+
+    # Move other components to device (sequential offloading still used in sampler)
+    # but we move them to the accelerator device
+    # VAE and Text Encoder are relatively small, keeping them on the local device
+    # but they must be on the same device as the sharded transformer's inputs/outputs
+
     # Load conditioning image if provided
     condition_image = None
     if args.condition_image:
-        print(f"Loading conditioning image from {args.condition_image}...")
+        if is_main_process:
+            print(f"Loading conditioning image from {args.condition_image}...")
         condition_image = load_image(args.condition_image)
 
     # Load reference video if provided
     reference_video = None
     if args.reference_video:
-        print(f"Loading reference video from {args.reference_video}...")
+        if is_main_process:
+            print(f"Loading reference video from {args.reference_video}...")
         reference_video, ref_fps = read_video(args.reference_video, max_frames=args.num_frames)
-        print(f"  Loaded {reference_video.shape[0]} frames @ {ref_fps:.1f} fps")
+        if is_main_process:
+            print(f"  Loaded {reference_video.shape[0]} frames @ {ref_fps:.1f} fps")
 
     # Determine generation mode
-    if args.reference_video is not None and args.condition_image is not None:
-        mode = "Video-to-Video + Image Conditioning (V2V+I2V)"
-    elif args.reference_video is not None:
-        mode = "Video-to-Video (V2V)"
-    elif args.condition_image is not None:
-        mode = "Image-to-Video (I2V)"
-    else:
-        mode = "Text-to-Video (T2V)"
+    if is_main_process:
+        if args.reference_video is not None and args.condition_image is not None:
+            mode = "Video-to-Video + Image Conditioning (V2V+I2V)"
+        elif args.reference_video is not None:
+            mode = "Video-to-Video (V2V)"
+        elif args.condition_image is not None:
+            mode = "Image-to-Video (I2V)"
+        else:
+            mode = "Text-to-Video (T2V)"
 
-    print("\n" + "=" * 80)
-    print("Generation Parameters")
-    print("=" * 80)
-    print(f"Mode: {mode}")
-    print(f"Prompt: {args.prompt}")
-    if args.negative_prompt:
-        print(f"Negative prompt: {args.negative_prompt}")
-    print(f"Resolution: {args.width}x{args.height}")
-    print(f"Frames: {args.num_frames} @ {args.frame_rate} fps")
-    print(f"Inference steps: {args.num_inference_steps}")
-    print(f"CFG scale: {args.guidance_scale}")
-    if args.stg_scale > 0:
-        blocks_str = args.stg_blocks if args.stg_blocks else "all"
-        print(f"STG scale: {args.stg_scale} (mode: {args.stg_mode}, blocks: {blocks_str})")
-    else:
-        print("STG: disabled")
-    print(f"Seed: {args.seed}")
-    if args.lora_path:
-        print(f"LoRA: {args.lora_path}")
-    if condition_image is not None:
-        print(f"Conditioning: Image ({args.condition_image})")
-    if reference_video is not None:
-        print(f"Reference: Video ({args.reference_video})")
-        if args.include_reference_in_output:
-            print("  → Will include reference side-by-side in output")
-    if generate_audio:
-        video_duration = args.num_frames / args.frame_rate
-        print(f"Audio: Enabled (duration will match video: {video_duration:.2f}s)")
-    print("=" * 80)
+        print("\n" + "=" * 80)
+        print("Generation Parameters")
+        print("=" * 80)
+        print(f"Mode: {mode}")
+        print(f"Prompt: {args.prompt}")
+        if args.negative_prompt:
+            print(f"Negative prompt: {args.negative_prompt}")
+        print(f"Resolution: {args.width}x{args.height}")
+        print(f"Frames: {args.num_frames} @ {args.frame_rate} fps")
+        print(f"Inference steps: {args.num_inference_steps}")
+        print(f"CFG scale: {args.guidance_scale}")
+        if args.stg_scale > 0:
+            blocks_str = args.stg_blocks if args.stg_blocks else "all"
+            print(f"STG scale: {args.stg_scale} (mode: {args.stg_mode}, blocks: {blocks_str})")
+        else:
+            print("STG: disabled")
+        print(f"Seed: {args.seed}")
+        if args.lora_path:
+            print(f"LoRA: {args.lora_path}")
+        if condition_image is not None:
+            print(f"Conditioning: Image ({args.condition_image})")
+        if reference_video is not None:
+            print(f"Reference: Video ({args.reference_video})")
+            if args.include_reference_in_output:
+                print("  → Will include reference side-by-side in output")
+        if generate_audio:
+            video_duration = args.num_frames / args.frame_rate
+            print(f"Audio: Enabled (duration will match video: {video_duration:.2f}s)")
+        print("=" * 80)
 
-    print(f"\nGenerating {'video + audio' if generate_audio else 'video'}...")
+        print(f"\nGenerating {'video + audio' if generate_audio else 'video'}...")
 
     # Create generation config
     gen_config = GenerationConfig(
@@ -386,8 +419,11 @@ def main() -> None:  # noqa: PLR0912, PLR0915
         stg_mode=args.stg_mode,
     )
 
-    # Generate with progress bar
-    with StandaloneSamplingProgress(num_steps=args.num_inference_steps) as progress:
+    # Generate with progress bar (only on main process)
+    with StandaloneSamplingProgress(
+        num_steps=args.num_inference_steps,
+        enabled=is_main_process,
+    ) as progress:
         # Create sampler with progress context
         sampler = ValidationSampler(
             transformer=transformer,
@@ -396,47 +432,52 @@ def main() -> None:  # noqa: PLR0912, PLR0915
             text_encoder=components.text_encoder,
             audio_decoder=components.audio_vae_decoder if generate_audio else None,
             vocoder=components.vocoder if generate_audio else None,
-            sampling_context=progress,
+            sampling_context=progress if is_main_process else None,
         )
+        # All processes enter generate() - FSDP handles sync
         video, audio = sampler.generate(
             config=gen_config,
-            device=args.device,
+            device=device,
         )
 
-    # Save video
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Save output (only on main process)
+    if is_main_process:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Get audio sample rate from vocoder if audio was generated
-    audio_sample_rate = None
-    if audio is not None and components.vocoder is not None:
-        audio_sample_rate = components.vocoder.output_sample_rate
+        # Get audio sample rate from vocoder if audio was generated
+        audio_sample_rate = None
+        if audio is not None and components.vocoder is not None:
+            audio_sample_rate = components.vocoder.output_sample_rate
 
-    save_video(
-        video_tensor=video,
-        output_path=output_path,
-        fps=args.frame_rate,
-        audio=audio,
-        audio_sample_rate=audio_sample_rate,
-    )
-    print(f"✓ Video saved to {args.output}")
-
-    # Save separate audio file if requested
-    if audio is not None and args.audio_output is not None:
-        audio_output_path = Path(args.audio_output)
-        audio_output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        torchaudio.save(
-            str(audio_output_path),
-            audio.cpu(),
-            sample_rate=audio_sample_rate,
+        save_video(
+            video_tensor=video,
+            output_path=output_path,
+            fps=args.frame_rate,
+            audio=audio,
+            audio_sample_rate=audio_sample_rate,
         )
-        duration = audio.shape[1] / audio_sample_rate
-        print(f"✓ Audio saved: {duration:.2f}s at {audio_sample_rate}Hz")
+        print(f"✓ Video saved to {args.output}")
 
-    print("\n" + "=" * 80)
-    print("Generation complete!")
-    print("=" * 80)
+        # Save separate audio file if requested
+        if audio is not None and args.audio_output is not None:
+            audio_output_path = Path(args.audio_output)
+            audio_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            torchaudio.save(
+                str(audio_output_path),
+                audio.cpu(),
+                sample_rate=audio_sample_rate,
+            )
+            duration = audio.shape[1] / audio_sample_rate
+            print(f"✓ Audio saved: {duration:.2f}s at {audio_sample_rate}Hz")
+
+        print("\n" + "=" * 80)
+        print("Generation complete!")
+        print("=" * 80)
+
+    # Final sync
+    accelerator.wait_for_everyone()
 
 
 if __name__ == "__main__":

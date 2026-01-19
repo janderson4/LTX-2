@@ -261,6 +261,7 @@ def load_model(
     with_audio_vae_decoder: bool = True,
     with_vocoder: bool = True,
     with_text_encoder: bool = True,
+    load_text_encoder_in_8bit: bool = False,
 ) -> LtxModelComponents:
     """
     Load LTX-2 model components from a safetensors checkpoint.
@@ -282,6 +283,7 @@ def load_model(
         with_audio_vae_decoder: Whether to load the audio VAE decoder
         with_vocoder: Whether to load the vocoder
         with_text_encoder: Whether to load the text encoder
+        load_text_encoder_in_8bit: Whether to load the text encoder in 8-bit mode
     Returns:
         LtxModelComponents containing all loaded model components
     """
@@ -331,7 +333,9 @@ def load_model(
         if text_encoder_path is None:
             raise ValueError("text_encoder_path must be provided when with_text_encoder=True")
         logger.debug("Loading Gemma text encoder...")
-        text_encoder = load_text_encoder(checkpoint_path, text_encoder_path, torch_device, dtype)
+        text_encoder = load_text_encoder(
+            checkpoint_path, text_encoder_path, torch_device, dtype, load_in_8bit=load_text_encoder_in_8bit
+        )
 
     # Create scheduler (stateless, no loading needed)
     scheduler = LTX2Scheduler()

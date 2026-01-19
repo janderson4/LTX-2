@@ -65,19 +65,24 @@ class StandaloneSamplingProgress:
                 ctx.advance_step()
     """
 
-    def __init__(self, num_steps: int, description: str = "Generating"):
+    def __init__(self, num_steps: int, description: str = "Generating", enabled: bool = True):
         """Initialize standalone sampling progress.
         Args:
             num_steps: Total number of denoising steps
             description: Description to show in progress bar
+            enabled: Whether to display the progress bar
         """
         self._num_steps = num_steps
         self._description = description
+        self._enabled = enabled
         self._progress: Progress | None = None
         self._task: TaskID | None = None
 
     def __enter__(self) -> "StandaloneSamplingProgress":
         """Start the progress display."""
+        if not self._enabled:
+            return self
+
         self._progress = Progress(
             TextColumn("[progress.description]{task.description}"),
             BarColumn(bar_width=40, style="blue"),

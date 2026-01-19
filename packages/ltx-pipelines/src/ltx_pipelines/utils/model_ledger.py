@@ -176,7 +176,7 @@ class ModelLedger:
             fp8transformer=self.fp8transformer,
         )
 
-    def transformer(self) -> X0Model:
+    def transformer(self, accelerator: "Accelerator" | None = None) -> X0Model:
         if not hasattr(self, "transformer_builder"):
             raise ValueError(
                 "Transformer not initialized. Please provide a checkpoint path to the ModelLedger constructor."
@@ -187,13 +187,18 @@ class ModelLedger:
                 module_ops=(UPCAST_DURING_INFERENCE,),
                 model_sd_ops=LTXV_MODEL_COMFY_RENAMING_WITH_TRANSFORMER_LINEAR_DOWNCAST_MAP,
             )
-            return X0Model(fp8_builder.build(device=self._target_device())).to(self.device).eval()
+            model = X0Model(fp8_builder.build(device=self._target_device())).to(self.device).eval()
         else:
-            return (
+            model = (
                 X0Model(self.transformer_builder.build(device=self._target_device(), dtype=self.dtype))
                 .to(self.device)
                 .eval()
             )
+
+        if accelerator is not None:
+            # Prepare for distributed inference
+            model = accelerator.prepare(model)
+        return model
 
     def video_decoder(self) -> VideoDecoder:
         if not hasattr(self, "vae_decoder_builder"):

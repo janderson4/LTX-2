@@ -2,6 +2,7 @@ import logging
 from collections.abc import Iterator
 
 import torch
+from accelerate import Accelerator
 
 from ltx_core.components.diffusion_steps import EulerDiffusionStep
 from ltx_core.components.noisers import GaussianNoiser
@@ -51,9 +52,11 @@ class DistilledPipeline:
         loras: list[LoraPathStrengthAndSDOps],
         device: torch.device = device,
         fp8transformer: bool = False,
+        accelerator: Accelerator | None = None,
     ):
         self.device = device
         self.dtype = torch.bfloat16
+        self.accelerator = accelerator
 
         self.model_ledger = ModelLedger(
             dtype=self.dtype,
@@ -101,7 +104,7 @@ class DistilledPipeline:
 
         # Stage 1: Initial low resolution video generation.
         video_encoder = self.model_ledger.video_encoder()
-        transformer = self.model_ledger.transformer()
+        transformer = self.model_ledger.transformer(accelerator=self.accelerator)
         stage_1_sigmas = torch.Tensor(DISTILLED_SIGMA_VALUES).to(self.device)
 
         def denoising_loop(
@@ -199,12 +202,20 @@ def main() -> None:
     logging.getLogger().setLevel(logging.INFO)
     parser = default_2_stage_distilled_arg_parser()
     args = parser.parse_args()
+
+    # Initialize accelerator
+    accelerator = Accelerator()
+    is_main_process = accelerator.is_main_process
+    device = accelerator.device
+
     pipeline = DistilledPipeline(
         checkpoint_path=args.checkpoint_path,
         spatial_upsampler_path=args.spatial_upsampler_path,
         gemma_root=args.gemma_root,
         loras=args.lora,
         fp8transformer=args.enable_fp8,
+        device=device,
+        accelerator=accelerator,
     )
     tiling_config = TilingConfig.default()
     video_chunks_number = get_video_chunks_number(args.num_frames, tiling_config)
@@ -220,14 +231,17 @@ def main() -> None:
         enhance_prompt=args.enhance_prompt,
     )
 
-    encode_video(
-        video=video,
-        fps=args.frame_rate,
-        audio=audio,
-        audio_sample_rate=AUDIO_SAMPLE_RATE,
-        output_path=args.output_path,
-        video_chunks_number=video_chunks_number,
-    )
+        if is_main_process:
+            encode_video(
+                video=video,
+                fps=args.frame_rate,
+                audio=audio,
+                audio_sample_rate=AUDIO_SAMPLE_RATE,
+                output_path=args.output_path,
+                video_chunks_number=video_chunks_number,
+            )
+
+    accelerator.wait_for_everyone()
 
 
 if __name__ == "__main__":
