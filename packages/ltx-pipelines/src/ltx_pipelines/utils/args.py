@@ -174,10 +174,13 @@ def basic_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--enable-fp8",
+        "--use-fp8",
         action="store_true",
-        help="Enable FP8 mode to reduce memory footprint by keeping the transformer and text encoder in lower precision. "
-        "Note that calculations are still performed in bfloat16 precision.",
+        help=(
+            "Enable FP8 mode for the transformer and text encoder. "
+            "Uses true FP8 compute on supported GPUs for latency reduction, "
+            "and falls back to memory-only FP8 otherwise."
+        ),
     )
     parser.add_argument(
         "--compile",
@@ -189,12 +192,6 @@ def basic_arg_parser() -> argparse.ArgumentParser:
         type=int,
         default=1,
         help="Number of GPUs to use for tensor parallelism (default: 1).",
-    )
-    parser.add_argument(
-        "--use-fp8-compute",
-        action="store_true",
-        help="Enable true FP8 compute for speedup (requires H100/H200 GPU and transformer-engine). "
-             "If not available, falls back to memory-only FP8.",
     )
     parser.add_argument("--enhance-prompt", action="store_true")
     return parser

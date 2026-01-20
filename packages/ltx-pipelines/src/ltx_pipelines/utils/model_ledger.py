@@ -20,7 +20,9 @@ from ltx_core.model.transformer import (
     UPCAST_DURING_INFERENCE,
     LTXModelConfigurator,
     X0Model,
+    amend_forward_with_fp8_compute,
     amend_forward_with_upcast,
+    is_transformer_engine_available,
 )
 from ltx_core.model.upsampler import LatentUpsampler, LatentUpsamplerConfigurator
 from ltx_core.model.video_vae import (
@@ -79,8 +81,9 @@ class ModelLedger:
     registry:
         Optional :class:`Registry` instance for weight caching across builders.
         Defaults to :class:`DummyRegistry` which performs no cross-builder caching.
-    fp8transformer:
-        If ``True``, builds the transformer with FP8 quantization and upcasting during inference.
+    use_fp8:
+        If ``True``, enables FP8 mode for transformer and text encoder, using true FP8 compute
+        when supported and falling back to memory-only FP8 otherwise.
     ### Creating Variants
     Use :meth:`with_loras` to create a new ``ModelLedger`` instance that includes
     additional LoRA configurations while sharing the same registry for weight caching.
@@ -95,11 +98,9 @@ class ModelLedger:
         spatial_upsampler_path: str | None = None,
         loras: LoraPathStrengthAndSDOps | None = None,
         registry: Registry | None = None,
-        fp8transformer: bool = False,
-        fp8textencoder: bool = False,
+        use_fp8: bool = False,
         compile: bool = False,
         tp_degree: int = 1,
-        use_fp8_compute: bool = False,
     ):
         self.dtype = dtype
         self.device = device
@@ -108,12 +109,12 @@ class ModelLedger:
         self.spatial_upsampler_path = spatial_upsampler_path
         self.loras = loras or ()
         self.registry = registry or DummyRegistry()
-        self.fp8transformer = fp8transformer
-        self.fp8textencoder = fp8textencoder
+        self.use_fp8 = use_fp8
         self.compile = compile
         self.tp_degree = tp_degree
-        self.use_fp8_compute = use_fp8_compute
         self._fp8_available = self._check_fp8_compute_support()
+        # True FP8 compute is only enabled when TE is available and TP is not used.
+        self.use_fp8_compute = self.use_fp8 and self._fp8_available and self.tp_degree == 1
         self.build_model_builders()
 
     def build_model_builders(self) -> None:
@@ -156,7 +157,7 @@ class ModelLedger:
 
             if self.gemma_root_path is not None:
                 # When using FP8 compute, load weights in bfloat16 - let TE handle quantization
-                use_naive_fp8 = self.fp8textencoder and not self.use_fp8_compute
+                use_naive_fp8 = self.use_fp8 and not self.use_fp8_compute
                 self.text_encoder_builder = Builder(
                     model_path=self.checkpoint_path,
                     model_class_configurator=AVGemmaTextEncoderModelConfigurator,
@@ -180,6 +181,8 @@ class ModelLedger:
 
     def _check_fp8_compute_support(self) -> bool:
         """Check if GPU supports true FP8 compute (H100/H200/Blackwell)"""
+        if not is_transformer_engine_available():
+            return False
         if not torch.cuda.is_available():
             return False
         try:
@@ -189,51 +192,10 @@ class ModelLedger:
             return False
 
     def _apply_fp8_compute(self, model: torch.nn.Module) -> torch.nn.Module:
-        """Apply true FP8 compute using Transformer Engine if available"""
+        """Apply true FP8 compute using Transformer-Engine FP8 kernels"""
         if not self.use_fp8_compute or not self._fp8_available:
             return model
-        
-        try:
-            import transformer_engine.pytorch as te
-            from transformer_engine.common import recipe
-            
-            # Don't replace layers - just wrap forward with FP8 autocast
-            # This maintains compatibility with tensor parallelism
-            original_forward = model.forward
-            fp8_recipe = recipe.DelayedScaling(
-                margin=0,
-                interval=1,
-                fp8_format=recipe.Format.HYBRID,
-                amax_history_len=1024,
-            )
-            
-            def fp8_forward(*args, **kwargs):
-                with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
-                    return original_forward(*args, **kwargs)
-            
-            model.forward = fp8_forward
-            return model
-            
-        except ImportError:
-            # Try PyTorch native FP8 as fallback
-            try:
-                from torchao.quantization import quantize_
-                from torchao.dtypes import Float8LinearConfig
-                
-                config = Float8LinearConfig(
-                    enable_amax_init=True,
-                    enable_pre_and_post_forward=True
-                )
-                quantize_(model, config)
-                return model
-            except ImportError:
-                import warnings
-                warnings.warn(
-                    "FP8 compute requested but no FP8 library available. "
-                    "Install transformer-engine or torchao for FP8 speedup. "
-                    "Falling back to memory-only FP8."
-                )
-                return model
+        return amend_forward_with_fp8_compute(model)
 
     def with_loras(self, loras: LoraPathStrengthAndSDOps) -> "ModelLedger":
         return ModelLedger(
@@ -244,11 +206,9 @@ class ModelLedger:
             spatial_upsampler_path=self.spatial_upsampler_path,
             loras=(*self.loras, *loras),
             registry=self.registry,
-            fp8transformer=self.fp8transformer,
-            fp8textencoder=self.fp8textencoder,
+            use_fp8=self.use_fp8,
             compile=self.compile,
             tp_degree=self.tp_degree,
-            use_fp8_compute=self.use_fp8_compute,
         )
 
     def transformer(self) -> X0Model:
@@ -256,13 +216,20 @@ class ModelLedger:
             raise ValueError(
                 "Transformer not initialized. Please provide a checkpoint path to the ModelLedger constructor."
             )
-        if self.fp8transformer:
-            if self.use_fp8_compute and self._fp8_available:
-                # True FP8 compute: build in bfloat16, move to device, then apply FP8 compute
+        if self.use_fp8:
+            if self.use_fp8_compute:
+                # True FP8 compute: 
+                # 1. Load in BF16
                 base_model = self.transformer_builder.build(device=self._target_device(), dtype=self.dtype)
-                base_model = base_model.to(self.device)
-                base_model = self._apply_fp8_compute(base_model)
-                model = X0Model(base_model).eval()
+                base_model = base_model.to(self.device).eval()
+                model = X0Model(base_model)
+                
+                # 2. Apply FP8 Compute with Transformer-Engine kernels
+                model.velocity_model = self._apply_fp8_compute(model.velocity_model)
+
+                # 3. Apply TP after FP8 module conversion
+                if self.tp_degree > 1:
+                    model = apply_tp(model, self.tp_degree)
             else:
                 # Memory-only FP8: use upcast approach
                 fp8_builder = replace(
@@ -271,15 +238,16 @@ class ModelLedger:
                     model_sd_ops=LTXV_MODEL_COMFY_RENAMING_WITH_TRANSFORMER_LINEAR_DOWNCAST_MAP,
                 )
                 model = X0Model(fp8_builder.build(device=self._target_device())).to(self.device).eval()
+                if self.tp_degree > 1:
+                    model = apply_tp(model, self.tp_degree)
         else:
             model = (
                 X0Model(self.transformer_builder.build(device=self._target_device(), dtype=self.dtype))
                 .to(self.device)
                 .eval()
             )
-
-        if self.tp_degree > 1:
-            model = apply_tp(model, self.tp_degree)
+            if self.tp_degree > 1:
+                model = apply_tp(model, self.tp_degree)
 
         if self.compile:
             model = torch.compile(model)
@@ -316,19 +284,20 @@ class ModelLedger:
 
         model = self.text_encoder_builder.build(device=self._target_device(), dtype=self.dtype).to(self.device).eval()
 
-        if self.fp8textencoder:
-            if self.use_fp8_compute and self._fp8_available:
+        # 1. Apply FP8 Compute or Upcast
+        if self.use_fp8:
+            if self.use_fp8_compute:
                 # True FP8 compute
                 model = self._apply_fp8_compute(model)
             else:
                 # Memory-only FP8
                 model = amend_forward_with_upcast(model)
-
-        # Text encoder is often left uncompiled due to string processing/tokenization, 
-        # but the heavy feature extraction can be compiled.
+        # 2. Apply TP after FP8 module conversion
         if self.tp_degree > 1:
             model = apply_tp(model, self.tp_degree)
 
+        # Text encoder is often left uncompiled due to string processing/tokenization, 
+        # but the heavy feature extraction can be compiled.
         if self.compile:
             model = torch.compile(model)
         return model

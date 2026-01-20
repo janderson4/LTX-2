@@ -1,5 +1,10 @@
 import torch
 
+try:
+    import transformer_engine.pytorch as te
+except Exception:  # pragma: no cover - optional dependency
+    te = None
+
 from ltx_core.loader.fuse_loras import fused_add_round_launch
 from ltx_core.loader.module_ops import ModuleOps
 from ltx_core.loader.sd_ops import KeyValueOperationResult, SDOps
@@ -165,6 +170,73 @@ def amend_forward_with_upcast(
         if isinstance(m, (torch.nn.Linear)):
             replace_fwd_with_upcast(m, with_stochastic_rounding, seed)
     return model
+
+
+def is_transformer_engine_available() -> bool:
+    return te is not None
+
+
+def _require_transformer_engine() -> None:
+    if te is None:
+        raise ImportError(
+            "transformer-engine is required for FP8 compute. Install it to enable use_fp8 on supported GPUs."
+        )
+
+
+def _wrap_with_fp8_autocast(model: torch.nn.Module) -> torch.nn.Module:
+    if getattr(model, "_fp8_autocast_wrapped", False):
+        return model
+
+    original_forward = model.forward
+
+    def fp8_forward(*args, **kwargs):
+        with te.fp8_autocast(enabled=True):
+            return original_forward(*args, **kwargs)
+
+    model.forward = fp8_forward
+    model._fp8_autocast_wrapped = True
+    return model
+
+
+def _convert_linear_to_te(layer: torch.nn.Linear) -> torch.nn.Module:
+    te_linear = te.Linear(
+        layer.in_features,
+        layer.out_features,
+        bias=layer.bias is not None,
+        params_dtype=layer.weight.dtype,
+        device=layer.weight.device,
+    )
+    with torch.no_grad():
+        te_linear.weight.copy_(layer.weight)
+        if layer.bias is not None:
+            te_linear.bias.copy_(layer.bias)
+    return te_linear
+
+
+def _replace_linear_modules(module: torch.nn.Module, min_in_features: int = 128) -> None:
+    for name, child in module.named_children():
+        if isinstance(child, torch.nn.Linear) and child.in_features >= min_in_features:
+            setattr(module, name, _convert_linear_to_te(child))
+        else:
+            _replace_linear_modules(child, min_in_features)
+
+
+def replace_fwd_with_fp8_compute(layer: torch.nn.Linear) -> torch.nn.Module:
+    """
+    Return a Transformer-Engine Linear replacement for the given layer.
+    """
+    _require_transformer_engine()
+    return _convert_linear_to_te(layer)
+
+
+def amend_forward_with_fp8_compute(model: torch.nn.Module) -> torch.nn.Module:
+    """
+    Replace Linear layers with Transformer-Engine Linear modules and run
+    the model under FP8 autocast for scaled FP8 compute.
+    """
+    _require_transformer_engine()
+    _replace_linear_modules(model, min_in_features=128)
+    return _wrap_with_fp8_autocast(model)
 
 
 LTXV_MODEL_COMFY_RENAMING_MAP = (

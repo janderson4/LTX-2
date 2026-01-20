@@ -46,7 +46,7 @@ class TI2VidOneStagePipeline:
         gemma_root: str,
         loras: list[LoraPathStrengthAndSDOps],
         device: torch.device = device,
-        fp8transformer: bool = False,
+        use_fp8: bool = False,
     ):
         self.dtype = torch.bfloat16
         self.device = device
@@ -56,7 +56,7 @@ class TI2VidOneStagePipeline:
             checkpoint_path=checkpoint_path,
             gemma_root_path=gemma_root,
             loras=loras,
-            fp8transformer=fp8transformer,
+            use_fp8=use_fp8,
         )
         self.pipeline_components = PipelineComponents(
             dtype=self.dtype,
@@ -164,7 +164,7 @@ def main() -> None:
         checkpoint_path=args.checkpoint_path,
         gemma_root=args.gemma_root,
         loras=args.lora,
-        fp8transformer=args.enable_fp8,
+        use_fp8=args.use_fp8,
     )
     video, audio = pipeline(
         prompt=args.prompt,

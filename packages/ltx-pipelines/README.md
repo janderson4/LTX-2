@@ -195,19 +195,19 @@ All pipelines support image conditioning, but with different methods:
 
 ### Memory Optimization
 
-**FP8 Transformer (Lower Memory Footprint):**
+**FP8 (Lower Memory Footprint + Latency Speedup):**
 
-For smaller GPU memory footprint, use the `enable-fp8` flag and use the `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` environment variable.
+Enable `--use-fp8` to use true FP8 compute on supported GPUs (for latency reduction), and fall back to memory-only FP8 otherwise. Also use `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` for more stable allocation.
 
 **CLI:**
 
 ```bash
-PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python -m ltx_pipelines.ti2vid_one_stage --enable-fp8 --checkpoint-path=...
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python -m ltx_pipelines.ti2vid_one_stage --use-fp8 --checkpoint-path=...
 ```
 
 **Programmatically:**
 
-When authoring custom scripts, pass the `fp8transformer` flag to pipeline classes or construct your own by analogy:
+When authoring custom scripts, pass the `use_fp8` flag to pipeline classes or construct your own by analogy:
 
 ```python
 pipeline = TI2VidTwoStagesPipeline(
@@ -216,7 +216,7 @@ pipeline = TI2VidTwoStagesPipeline(
     spatial_upsampler_path=upsampler_path,
     gemma_root=gemma_root_path,
     loras=[],
-    fp8transformer=True,
+    use_fp8=True,
 )
 pipeline(...)
 ```

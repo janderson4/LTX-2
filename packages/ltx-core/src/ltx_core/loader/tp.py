@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.distributed as dist
 from torch.distributed.device_mesh import init_device_mesh
@@ -15,7 +16,7 @@ from ltx_core.model.transformer.model import LTXModel
 def maybe_init_dist():
     if not dist.is_initialized():
         # Only initialize if torchrun or similar set up the environment
-        if "RANK" in torch.os.environ and "WORLD_SIZE" in torch.os.environ:
+        if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
             dist.init_process_group("nccl")
             rank = dist.get_rank()
             torch.cuda.set_device(rank)

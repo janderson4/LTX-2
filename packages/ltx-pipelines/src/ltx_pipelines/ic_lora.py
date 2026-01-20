@@ -54,7 +54,7 @@ class ICLoraPipeline:
         gemma_root: str,
         loras: list[LoraPathStrengthAndSDOps],
         device: torch.device = device,
-        fp8transformer: bool = False,
+        use_fp8: bool = False,
     ):
         self.dtype = torch.bfloat16
         self.stage_1_model_ledger = ModelLedger(
@@ -64,7 +64,7 @@ class ICLoraPipeline:
             spatial_upsampler_path=spatial_upsampler_path,
             gemma_root_path=gemma_root,
             loras=loras,
-            fp8transformer=fp8transformer,
+            use_fp8=use_fp8,
         )
         self.stage_2_model_ledger = ModelLedger(
             dtype=self.dtype,
@@ -73,7 +73,7 @@ class ICLoraPipeline:
             spatial_upsampler_path=spatial_upsampler_path,
             gemma_root_path=gemma_root,
             loras=[],
-            fp8transformer=fp8transformer,
+            use_fp8=use_fp8,
         )
         self.pipeline_components = PipelineComponents(
             dtype=self.dtype,
@@ -281,7 +281,7 @@ def main() -> None:
         spatial_upsampler_path=args.spatial_upsampler_path,
         gemma_root=args.gemma_root,
         loras=args.lora,
-        fp8transformer=args.enable_fp8,
+        use_fp8=args.use_fp8,
     )
     tiling_config = TilingConfig.default()
     video_chunks_number = get_video_chunks_number(args.num_frames, tiling_config)
