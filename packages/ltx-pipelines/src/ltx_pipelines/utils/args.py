@@ -179,6 +179,11 @@ def basic_arg_parser() -> argparse.ArgumentParser:
         help="Enable FP8 mode to reduce memory footprint by keeping model in lower precision. "
         "Note that calculations are still performed in bfloat16 precision.",
     )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Enable torch.compile for faster inference (first run will be slow).",
+    )
     parser.add_argument("--enhance-prompt", action="store_true")
     return parser
 

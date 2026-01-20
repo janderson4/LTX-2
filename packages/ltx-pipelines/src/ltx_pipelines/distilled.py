@@ -51,6 +51,7 @@ class DistilledPipeline:
         loras: list[LoraPathStrengthAndSDOps],
         device: torch.device = device,
         fp8transformer: bool = False,
+        compile: bool = False,
     ):
         self.device = device
         self.dtype = torch.bfloat16
@@ -63,6 +64,7 @@ class DistilledPipeline:
             gemma_root_path=gemma_root,
             loras=loras,
             fp8transformer=fp8transformer,
+            compile=compile,
         )
 
         self.pipeline_components = PipelineComponents(
@@ -205,6 +207,7 @@ def main() -> None:
         gemma_root=args.gemma_root,
         loras=args.lora,
         fp8transformer=args.enable_fp8,
+        compile=args.compile,
     )
     tiling_config = TilingConfig.default()
     video_chunks_number = get_video_chunks_number(args.num_frames, tiling_config)
