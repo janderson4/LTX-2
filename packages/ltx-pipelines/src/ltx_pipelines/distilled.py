@@ -52,6 +52,8 @@ class DistilledPipeline:
         device: torch.device = device,
         fp8transformer: bool = False,
         compile: bool = False,
+        tp_degree: int = 1,
+        use_fp8_compute: bool = False,
     ):
         self.device = device
         self.dtype = torch.bfloat16
@@ -64,7 +66,10 @@ class DistilledPipeline:
             gemma_root_path=gemma_root,
             loras=loras,
             fp8transformer=fp8transformer,
+            fp8textencoder=fp8transformer,  # Use same flag for both
             compile=compile,
+            tp_degree=tp_degree,
+            use_fp8_compute=use_fp8_compute,
         )
 
         self.pipeline_components = PipelineComponents(
@@ -208,6 +213,8 @@ def main() -> None:
         loras=args.lora,
         fp8transformer=args.enable_fp8,
         compile=args.compile,
+        tp_degree=args.tp_degree,
+        use_fp8_compute=args.use_fp8_compute,
     )
     tiling_config = TilingConfig.default()
     video_chunks_number = get_video_chunks_number(args.num_frames, tiling_config)

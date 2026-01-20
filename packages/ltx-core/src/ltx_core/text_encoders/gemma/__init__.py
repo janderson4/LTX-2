@@ -1,6 +1,7 @@
 """Gemma text encoder components."""
 
 from ltx_core.text_encoders.gemma.encoders.av_encoder import (
+    AV_GEMMA_TEXT_ENCODER_FP8_KEY_OPS,
     AV_GEMMA_TEXT_ENCODER_KEY_OPS,
     AVGemmaEncoderOutput,
     AVGemmaTextEncoderModel,
@@ -19,6 +20,7 @@ from ltx_core.text_encoders.gemma.encoders.video_only_encoder import (
 
 __all__ = [
     "AV_GEMMA_TEXT_ENCODER_KEY_OPS",
+    "AV_GEMMA_TEXT_ENCODER_FP8_KEY_OPS",
     "AVGemmaEncoderOutput",
     "AVGemmaTextEncoderModel",
     "AVGemmaTextEncoderModelConfigurator",

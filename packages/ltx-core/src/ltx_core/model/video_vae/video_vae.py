@@ -4,6 +4,7 @@ from typing import Any, Callable, Iterator, List, Tuple
 import torch
 from einops import rearrange
 from torch import nn
+import torch.distributed as dist
 
 from ltx_core.model.common.normalization import PixelNorm
 from ltx_core.model.transformer.timestep_embedding import PixArtAlphaCombinedTimestepSizeEmbeddings
@@ -780,6 +781,12 @@ class VideoDecoder(nn.Module):
 
         weights = torch.zeros_like(buffer)
 
+        # Distribute tiles across GPUs if distributed is initialized
+        if dist.is_initialized():
+            rank = dist.get_rank()
+            world_size = dist.get_world_size()
+            group_tiles = group_tiles[rank::world_size]
+
         for tile in group_tiles:
             decoded_tile = self.forward(latent[tile.in_coords], timestep, generator)
             mask = tile.blend_mask.to(device=buffer.device, dtype=buffer.dtype)
@@ -806,6 +813,10 @@ class VideoDecoder(nn.Module):
 
             buffer[chunk_coords] += decoded_slice * mask_slice
             weights[chunk_coords] += mask_slice
+
+        if dist.is_initialized():
+            dist.all_reduce(buffer, op=dist.ReduceOp.SUM)
+            dist.all_reduce(weights, op=dist.ReduceOp.SUM)
 
         return weights
 

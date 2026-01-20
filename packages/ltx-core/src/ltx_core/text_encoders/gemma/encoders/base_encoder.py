@@ -230,7 +230,7 @@ def _find_matching_dir(root_path: str, pattern: str) -> str:
     return str(matches[0].parent)
 
 
-def module_ops_from_gemma_root(gemma_root: str) -> tuple[ModuleOps, ...]:
+def module_ops_from_gemma_root(gemma_root: str, quantize_fp8: bool = False) -> tuple[ModuleOps, ...]:
     gemma_path = _find_matching_dir(gemma_root, "model*.safetensors")
     tokenizer_path = _find_matching_dir(gemma_root, "tokenizer.model")
     processor_path = _find_matching_dir(gemma_root, "preprocessor_config.json")
@@ -239,6 +239,12 @@ def module_ops_from_gemma_root(gemma_root: str) -> tuple[ModuleOps, ...]:
         module.model = Gemma3ForConditionalGeneration.from_pretrained(
             gemma_path, local_files_only=True, torch_dtype=torch.bfloat16
         )
+        if quantize_fp8:
+            for m in module.model.modules():
+                if isinstance(m, torch.nn.Linear):
+                    m.weight.data = m.weight.data.to(dtype=torch.float8_e4m3fn)
+                    if m.bias is not None:
+                        m.bias.data = m.bias.data.to(dtype=torch.float8_e4m3fn)
         return module
 
     def load_tokenizer(module: GemmaTextEncoderModelBase) -> GemmaTextEncoderModelBase:

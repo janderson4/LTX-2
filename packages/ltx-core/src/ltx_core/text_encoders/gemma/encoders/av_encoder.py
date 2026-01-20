@@ -3,7 +3,7 @@ from typing import NamedTuple
 import torch
 from transformers.models.gemma3 import Gemma3ForConditionalGeneration
 
-from ltx_core.loader.sd_ops import SDOps
+from ltx_core.loader.sd_ops import KeyValueOperationResult, SDOps
 from ltx_core.model.model_protocol import ModelConfigurator
 from ltx_core.text_encoders.gemma.embeddings_connector import (
     Embeddings1DConnector,
@@ -83,6 +83,13 @@ class AVGemmaTextEncoderModelConfigurator(ModelConfigurator[AVGemmaTextEncoderMo
         )
 
 
+def _naive_weight_or_bias_downcast(key: str, value: torch.Tensor) -> list[KeyValueOperationResult]:
+    """
+    Downcast the weight or bias to the float8_e4m3fn dtype.
+    """
+    return [KeyValueOperationResult(key, value.to(dtype=torch.float8_e4m3fn))]
+
+
 AV_GEMMA_TEXT_ENCODER_KEY_OPS = (
     SDOps("AV_GEMMA_TEXT_ENCODER_KEY_OPS")
     .with_matching(prefix="text_embedding_projection.")
@@ -91,4 +98,20 @@ AV_GEMMA_TEXT_ENCODER_KEY_OPS = (
     .with_replacement("text_embedding_projection.", "feature_extractor_linear.")
     .with_replacement("model.diffusion_model.video_embeddings_connector.", "embeddings_connector.")
     .with_replacement("model.diffusion_model.audio_embeddings_connector.", "audio_embeddings_connector.")
+)
+
+AV_GEMMA_TEXT_ENCODER_FP8_KEY_OPS = (
+    SDOps("AV_GEMMA_TEXT_ENCODER_FP8_KEY_OPS")
+    .with_matching(prefix="text_embedding_projection.")
+    .with_matching(prefix="model.diffusion_model.audio_embeddings_connector.")
+    .with_matching(prefix="model.diffusion_model.video_embeddings_connector.")
+    .with_replacement("text_embedding_projection.", "feature_extractor_linear.")
+    .with_replacement("model.diffusion_model.video_embeddings_connector.", "embeddings_connector.")
+    .with_replacement("model.diffusion_model.audio_embeddings_connector.", "audio_embeddings_connector.")
+    .with_kv_operation(key_prefix="feature_extractor_linear.", key_suffix=".weight", operation=_naive_weight_or_bias_downcast)
+    .with_kv_operation(key_prefix="feature_extractor_linear.", key_suffix=".bias", operation=_naive_weight_or_bias_downcast)
+    .with_kv_operation(key_prefix="embeddings_connector.", key_suffix=".proj.weight", operation=_naive_weight_or_bias_downcast)
+    .with_kv_operation(key_prefix="embeddings_connector.", key_suffix=".proj.bias", operation=_naive_weight_or_bias_downcast)
+    .with_kv_operation(key_prefix="audio_embeddings_connector.", key_suffix=".proj.weight", operation=_naive_weight_or_bias_downcast)
+    .with_kv_operation(key_prefix="audio_embeddings_connector.", key_suffix=".proj.bias", operation=_naive_weight_or_bias_downcast)
 )

@@ -9,6 +9,7 @@ from ltx_core.model.transformer.model_configurator import (
     LTXModelConfigurator,
     LTXVideoOnlyModelConfigurator,
     UpcastWithStochasticRounding,
+    amend_forward_with_upcast,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "Modality",
     "UpcastWithStochasticRounding",
     "X0Model",
+    "amend_forward_with_upcast",
 ]
