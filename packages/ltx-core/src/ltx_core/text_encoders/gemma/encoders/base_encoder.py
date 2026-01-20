@@ -240,8 +240,21 @@ def module_ops_from_gemma_root(gemma_root: str, quantize_fp8: bool = False) -> t
             gemma_path, local_files_only=True, torch_dtype=torch.bfloat16
         )
         if quantize_fp8:
+            # Find input embedding weight to avoid quantizing shared weights
+            shared_weights = set()
+            try:
+                input_embeddings = module.model.get_input_embeddings()
+                if input_embeddings is not None and hasattr(input_embeddings, "weight"):
+                    shared_weights.add(id(input_embeddings.weight))
+            except Exception:
+                pass
+
             for m in module.model.modules():
                 if isinstance(m, torch.nn.Linear):
+                    # Skip shared weights (e.g. lm_head shared with embed_tokens)
+                    # to prevent Embedding layers from returning FP8 tensors.
+                    if id(m.weight) in shared_weights:
+                        continue
                     m.weight.data = m.weight.data.to(dtype=torch.float8_e4m3fn)
                     if m.bias is not None:
                         m.bias.data = m.bias.data.to(dtype=torch.float8_e4m3fn)

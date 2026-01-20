@@ -165,10 +165,12 @@ def amend_forward_with_upcast(
     """
     Replace the forward method of the model's Linear and RMSNorm layers to forward
     with upcast and optional stochastic rounding.
+    Only patches layers where the weight is already in an FP8 dtype.
     """
     for m in model.modules():
         if isinstance(m, (torch.nn.Linear)):
-            replace_fwd_with_upcast(m, with_stochastic_rounding, seed)
+            if m.weight.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
+                replace_fwd_with_upcast(m, with_stochastic_rounding, seed)
     return model
 
 
@@ -183,19 +185,20 @@ def _require_transformer_engine() -> None:
         )
 
 
-def _wrap_with_fp8_autocast(model: torch.nn.Module) -> torch.nn.Module:
-    if getattr(model, "_fp8_autocast_wrapped", False):
-        return model
+class TELinearWrapper(torch.nn.Module):
+    """
+    Wraps a Transformer-Engine Linear layer to apply fp8_autocast surgically.
+    This prevents torch.compile from attempting to fold non-linear constants
+    (like RoPE frequencies) into the narrow FP8 range.
+    """
 
-    original_forward = model.forward
+    def __init__(self, te_linear: torch.nn.Module):
+        super().__init__()
+        self.te_linear = te_linear
 
-    def fp8_forward(*args, **kwargs):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         with te.fp8_autocast(enabled=True):
-            return original_forward(*args, **kwargs)
-
-    model.forward = fp8_forward
-    model._fp8_autocast_wrapped = True
-    return model
+            return self.te_linear(x)
 
 
 def _convert_linear_to_te(layer: torch.nn.Linear) -> torch.nn.Module:
@@ -210,23 +213,7 @@ def _convert_linear_to_te(layer: torch.nn.Linear) -> torch.nn.Module:
         te_linear.weight.copy_(layer.weight)
         if layer.bias is not None:
             te_linear.bias.copy_(layer.bias)
-    return te_linear
-
-
-def _replace_linear_modules(module: torch.nn.Module, min_in_features: int = 128) -> None:
-    for name, child in module.named_children():
-        if isinstance(child, torch.nn.Linear) and child.in_features >= min_in_features:
-            setattr(module, name, _convert_linear_to_te(child))
-        else:
-            _replace_linear_modules(child, min_in_features)
-
-
-def replace_fwd_with_fp8_compute(layer: torch.nn.Linear) -> torch.nn.Module:
-    """
-    Return a Transformer-Engine Linear replacement for the given layer.
-    """
-    _require_transformer_engine()
-    return _convert_linear_to_te(layer)
+    return TELinearWrapper(te_linear)
 
 
 def amend_forward_with_fp8_compute(model: torch.nn.Module) -> torch.nn.Module:
@@ -236,7 +223,7 @@ def amend_forward_with_fp8_compute(model: torch.nn.Module) -> torch.nn.Module:
     """
     _require_transformer_engine()
     _replace_linear_modules(model, min_in_features=128)
-    return _wrap_with_fp8_autocast(model)
+    return model
 
 
 LTXV_MODEL_COMFY_RENAMING_MAP = (
