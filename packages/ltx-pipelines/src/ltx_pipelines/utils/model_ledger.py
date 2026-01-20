@@ -5,7 +5,7 @@ import torch
 from ltx_core.loader.primitives import LoraPathStrengthAndSDOps
 from ltx_core.loader.registry import DummyRegistry, Registry
 from ltx_core.loader.single_gpu_model_builder import SingleGPUModelBuilder as Builder
-from ltx_core.loader.tp import apply_tp
+from ltx_core.loader.tp import apply_tp, maybe_init_dist
 from ltx_core.model.audio_vae import (
     AUDIO_VAE_DECODER_COMFY_KEYS_FILTER,
     VOCODER_COMFY_KEYS_FILTER,
@@ -102,6 +102,9 @@ class ModelLedger:
         compile: bool = False,
         tp_degree: int = 1,
     ):
+        if tp_degree > 1:
+            maybe_init_dist()
+            
         self.dtype = dtype
         self.device = device
         self.checkpoint_path = checkpoint_path

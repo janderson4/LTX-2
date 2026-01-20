@@ -13,6 +13,7 @@ from ltx_core.model.video_vae import TilingConfig, get_video_chunks_number
 from ltx_core.model.video_vae import decode_video as vae_decode_video
 from ltx_core.text_encoders.gemma import encode_text
 from ltx_core.types import LatentState, VideoPixelShape
+from ltx_core.loader.tp import maybe_init_dist
 from ltx_pipelines.utils import ModelLedger
 from ltx_pipelines.utils.args import default_2_stage_distilled_arg_parser
 from ltx_pipelines.utils.constants import (
@@ -200,6 +201,9 @@ class DistilledPipeline:
 
 @torch.inference_mode()
 def main() -> None:
+    # Early init for distributed environment
+    maybe_init_dist()
+    
     logging.getLogger().setLevel(logging.INFO)
     parser = default_2_stage_distilled_arg_parser()
     args = parser.parse_args()

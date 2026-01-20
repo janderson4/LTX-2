@@ -1,3 +1,4 @@
+import os
 import gc
 import logging
 from dataclasses import replace
@@ -28,7 +29,9 @@ from ltx_pipelines.utils.types import (
 
 def get_device() -> torch.device:
     if torch.cuda.is_available():
-        return torch.device("cuda")
+        # Check for local rank from torchrun/distributed
+        local_rank = int(os.environ.get("LOCAL_RANK", 0))
+        return torch.device(f"cuda:{local_rank}")
     return torch.device("cpu")
 
 

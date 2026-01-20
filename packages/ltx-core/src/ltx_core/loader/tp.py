@@ -8,8 +8,6 @@ from torch.distributed.tensor.parallel import (
     parallelize_module,
 )
 
-from ltx_core.model.transformer.attention import Attention
-from ltx_core.model.transformer.feed_forward import FeedForward
 from ltx_core.model.transformer.model import LTXModel
 
 
@@ -18,8 +16,9 @@ def maybe_init_dist():
         # Only initialize if torchrun or similar set up the environment
         if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
             dist.init_process_group("nccl")
-            rank = dist.get_rank()
-            torch.cuda.set_device(rank)
+            # Use LOCAL_RANK to ensure we set the correct device on the node
+            local_rank = int(os.environ.get("LOCAL_RANK", 0))
+            torch.cuda.set_device(local_rank)
             return True
     return False
 
@@ -36,13 +35,16 @@ def get_tp_mesh(tp_size):
 
 def parallelize_ltx_model(model: LTXModel, device_mesh):
     """
-    Parallelize LTXModel using Tensor Parallelism.
+    Parallelize LTXModel using Tensor Parallelism (Megatron-style).
+    This implementation keeps the hidden state REPLICATED at the boundaries of
+    sub-blocks (Attention/FFN) to ensure compatibility with AdaLN modulation
+    and skip connections without additional communication overhead.
     """
     tp_mesh = device_mesh["tp"]
 
     # Parallelize transformer blocks
     for block in model.transformer_blocks:
-        # Parallelize video attention
+        # 1. Parallelize Video Attention
         if hasattr(block, "attn1"):
             parallelize_module(
                 block.attn1,
@@ -65,7 +67,8 @@ def parallelize_ltx_model(model: LTXModel, device_mesh):
                     "to_out.0": RowwiseParallel(),
                 },
             )
-        # Parallelize audio attention
+
+        # 2. Parallelize Audio Attention
         if hasattr(block, "audio_attn1"):
             parallelize_module(
                 block.audio_attn1,
@@ -88,7 +91,8 @@ def parallelize_ltx_model(model: LTXModel, device_mesh):
                     "to_out.0": RowwiseParallel(),
                 },
             )
-        # Parallelize cross attention
+
+        # 3. Parallelize Cross-Modality Attention
         if hasattr(block, "audio_to_video_attn"):
             parallelize_module(
                 block.audio_to_video_attn,
@@ -111,8 +115,8 @@ def parallelize_ltx_model(model: LTXModel, device_mesh):
                     "to_out.0": RowwiseParallel(),
                 },
             )
-        
-        # Parallelize FeedForward
+
+        # 4. Parallelize FeedForward Networks
         if hasattr(block, "ff"):
             parallelize_module(
                 block.ff,
@@ -132,12 +136,6 @@ def parallelize_ltx_model(model: LTXModel, device_mesh):
                 },
             )
 
-    # Parallelize input/output projections if they are large enough
-    if hasattr(model, "patchify_proj"):
-        parallelize_module(model, tp_mesh, {"patchify_proj": ColwiseParallel()})
-    if hasattr(model, "proj_out"):
-        parallelize_module(model, tp_mesh, {"proj_out": RowwiseParallel()})
-    
     return model
 
 
@@ -173,6 +171,7 @@ def parallelize_gemma_model(model, device_mesh):
         )
     return model
 
+
 def apply_tp(model, tp_size):
     if tp_size <= 1:
         return model
@@ -191,4 +190,3 @@ def apply_tp(model, tp_size):
         return parallelize_gemma_model(model, mesh)
     
     return model
-
