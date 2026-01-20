@@ -112,12 +112,13 @@ class ModelLedger:
         self.spatial_upsampler_path = spatial_upsampler_path
         self.loras = loras or ()
         self.registry = registry or DummyRegistry()
-        self.use_fp8 = use_fp8
+        # Option 1: disable all FP8 paths when TP is enabled
+        self.use_fp8 = use_fp8 and tp_degree == 1
         self.compile = compile
         self.tp_degree = tp_degree
         self._fp8_available = self._check_fp8_compute_support()
         # True FP8 compute is only enabled when TE is available and TP is not used.
-        self.use_fp8_compute = self.use_fp8 and self._fp8_available and self.tp_degree == 1
+        self.use_fp8_compute = self.use_fp8 and self._fp8_available
         self.build_model_builders()
 
     def build_model_builders(self) -> None:
@@ -219,7 +220,10 @@ class ModelLedger:
             raise ValueError(
                 "Transformer not initialized. Please provide a checkpoint path to the ModelLedger constructor."
             )
-        if self.use_fp8:
+        
+        # FP8 is only used if we are on a single GPU. 
+        # For TP, we use pure BF16 to ensure compatibility with DTensor and maximum speed.
+        if self.use_fp8 and self.tp_degree == 1:
             if self.use_fp8_compute:
                 # True FP8 compute: 
                 # 1. Load in BF16
@@ -229,10 +233,6 @@ class ModelLedger:
                 
                 # 2. Apply FP8 Compute with Transformer-Engine kernels
                 model.velocity_model = self._apply_fp8_compute(model.velocity_model)
-
-                # 3. Apply TP after FP8 module conversion
-                if self.tp_degree > 1:
-                    model = apply_tp(model, self.tp_degree)
             else:
                 # Memory-only FP8: use upcast approach
                 fp8_builder = replace(
@@ -241,8 +241,6 @@ class ModelLedger:
                     model_sd_ops=LTXV_MODEL_COMFY_RENAMING_WITH_TRANSFORMER_LINEAR_DOWNCAST_MAP,
                 )
                 model = X0Model(fp8_builder.build(device=self._target_device())).to(self.device).eval()
-                if self.tp_degree > 1:
-                    model = apply_tp(model, self.tp_degree)
         else:
             model = (
                 X0Model(self.transformer_builder.build(device=self._target_device(), dtype=self.dtype))
@@ -287,16 +285,16 @@ class ModelLedger:
 
         model = self.text_encoder_builder.build(device=self._target_device(), dtype=self.dtype).to(self.device).eval()
 
-        # 1. Apply FP8 Compute or Upcast
-        if self.use_fp8:
+        # FP8 is only used if we are on a single GPU. 
+        # For TP, we use pure BF16 to ensure compatibility with DTensor and maximum speed.
+        if self.use_fp8 and self.tp_degree == 1:
             if self.use_fp8_compute:
                 # True FP8 compute
                 model = self._apply_fp8_compute(model)
             else:
                 # Memory-only FP8
                 model = amend_forward_with_upcast(model)
-        # 2. Apply TP after FP8 module conversion
-        if self.tp_degree > 1:
+        elif self.tp_degree > 1:
             model = apply_tp(model, self.tp_degree)
 
         # Text encoder is often left uncompiled due to string processing/tokenization, 
