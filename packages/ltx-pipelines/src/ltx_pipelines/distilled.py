@@ -231,15 +231,15 @@ def main() -> None:
         enhance_prompt=args.enhance_prompt,
     )
 
-        if is_main_process:
-            encode_video(
-                video=video,
-                fps=args.frame_rate,
-                audio=audio,
-                audio_sample_rate=AUDIO_SAMPLE_RATE,
-                output_path=args.output_path,
-                video_chunks_number=video_chunks_number,
-            )
+    if is_main_process:
+        encode_video(
+            video=video,
+            fps=args.frame_rate,
+            audio=audio,
+            audio_sample_rate=AUDIO_SAMPLE_RATE,
+            output_path=args.output_path,
+            video_chunks_number=video_chunks_number,
+        )
 
     accelerator.wait_for_everyone()
 
