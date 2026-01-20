@@ -65,10 +65,12 @@ def shard_norm(norm, mesh):
             inv_rms = torch.rsqrt(local_sum / global_dim + norm.eps)
             y_local = x_local * inv_rms
 
-            if norm.weight is not None:
-                y_local = y_local * _get_local(norm.weight)
-            if norm.bias is not None:
-                y_local = y_local + _get_local(norm.bias)
+            weight = getattr(norm, "weight", None)
+            if weight is not None:
+                y_local = y_local * _get_local(weight)
+            bias = getattr(norm, "bias", None)
+            if bias is not None:
+                y_local = y_local + _get_local(bias)
 
             if isinstance(x, DTensor):
                 return DTensor.from_local(y_local, mesh, [Shard(-1)])
@@ -77,7 +79,7 @@ def shard_norm(norm, mesh):
         norm.forward = sharded_rmsnorm
     else:
         # Update the module's expected shape so the runtime check passes
-        if hasattr(norm, "normalized_shape"):
+        if hasattr(norm, "normalized_shape") and getattr(norm, "weight", None) is not None:
             weight_tensor = norm.weight.data
             if isinstance(weight_tensor, DTensor):
                 local_size = weight_tensor.to_local().size(-1)
