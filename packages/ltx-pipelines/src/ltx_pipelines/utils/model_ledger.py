@@ -35,6 +35,7 @@ from ltx_core.text_encoders.gemma import (
     AVGemmaTextEncoderModelConfigurator,
     module_ops_from_gemma_root,
 )
+from typing import Optional
 
 
 class ModelLedger:
@@ -176,7 +177,7 @@ class ModelLedger:
             fp8transformer=self.fp8transformer,
         )
 
-    def transformer(self, accelerator: "Accelerator" | None = None) -> X0Model:
+    def transformer(self, accelerator: Optional["Accelerator"] = None) -> X0Model:
         if not hasattr(self, "transformer_builder"):
             raise ValueError(
                 "Transformer not initialized. Please provide a checkpoint path to the ModelLedger constructor."
@@ -195,9 +196,14 @@ class ModelLedger:
                 .eval()
             )
 
+        # Don't prepare with FSDP2 yet - will be done with optimizer
         if accelerator is not None:
-            # Prepare for distributed inference
-            model = accelerator.prepare(model)
+            if getattr(accelerator, "is_fsdp2", False):
+                # Skip preparation for FSDP2 - will be done later with optimizer
+                # or not at all for inference (inference on FSDP2 requires optimizer in prepare())
+                pass
+            else:
+                model = accelerator.prepare(model)
         return model
 
     def video_decoder(self) -> VideoDecoder:
