@@ -1,4 +1,6 @@
 import os
+from dataclasses import replace
+
 import torch
 import torch.distributed as dist
 from torch.distributed.device_mesh import init_device_mesh
@@ -98,6 +100,18 @@ def update_attn_heads(attn, tp_size):
     """
     if hasattr(attn, "heads"):
         attn.heads = attn.heads // tp_size
+
+
+def shard_pe(pe, mesh):
+    """Shard positional embeddings (tuple of cos, sin) along the head dimension."""
+    if pe is None:
+        return None
+    cos, sin = pe
+    # cos/sin are (B, H, T, D) - shard on H (dim 1)
+    # Using distribute_tensor ensures correct rank-aware sharding via DeviceMesh
+    sharded_cos = distribute_tensor(cos, mesh, [Shard(1)]).to_local()
+    sharded_sin = distribute_tensor(sin, mesh, [Shard(1)]).to_local()
+    return sharded_cos, sharded_sin
 
 
 def parallelize_ltx_model(model: LTXModel, device_mesh):
@@ -224,6 +238,25 @@ def parallelize_ltx_model(model: LTXModel, device_mesh):
                     "net.2": RowwiseParallel(output_layouts=Replicate()),
                 },
             )
+
+    # Wrap preprocessors to shard positional embeddings
+    def wrap_preprocessor(preprocessor, mesh):
+        orig_prepare = preprocessor.prepare
+
+        def sharded_prepare(modality):
+            args = orig_prepare(modality)
+            return replace(
+                args,
+                positional_embeddings=shard_pe(args.positional_embeddings, mesh),
+                cross_positional_embeddings=shard_pe(args.cross_positional_embeddings, mesh),
+            )
+
+        preprocessor.prepare = sharded_prepare
+
+    if hasattr(model, "video_args_preprocessor"):
+        wrap_preprocessor(model.video_args_preprocessor, tp_mesh)
+    if hasattr(model, "audio_args_preprocessor"):
+        wrap_preprocessor(model.audio_args_preprocessor, tp_mesh)
 
     return model
 

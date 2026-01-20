@@ -43,7 +43,57 @@ def apply_split_rotary_emb(
     input_tensor: torch.Tensor, cos_freqs: torch.Tensor, sin_freqs: torch.Tensor
 ) -> torch.Tensor:
     needs_reshape = False
+    
+    # Handle tensor parallelism: slice positional embeddings to match local head count
+    # This must be done before reshaping input_tensor
+    if cos_freqs.ndim == 4:
+        h_full = cos_freqs.shape[1]
+        b, t = cos_freqs.shape[0], cos_freqs.shape[2]
+        
+        # Determine local head count from input tensor, handling both regular and DTensors
+        def _get_local_size(t, dim):
+            if hasattr(t, "to_local"):
+                return t.to_local().shape[dim]
+            return t.shape[dim]
+
+        if input_tensor.ndim == 4:
+            h_local = _get_local_size(input_tensor, 1)
+        else:
+            # input_tensor is 3D: (b, t, inner_dim_local)
+            # inner_dim_local = num_heads_local * dim_head
+            # cos_freqs has shape (b, h_full, t, dim_head // 2) before slicing
+            inner_dim_local = _get_local_size(input_tensor, -1)
+            dim_head_half = cos_freqs.shape[-1]
+            dim_head = dim_head_half * 2
+            h_local = inner_dim_local // dim_head
+            
+            # If h_local doesn't divide evenly, fall back to using h_full
+            if inner_dim_local % dim_head != 0:
+                h_local = h_full
+        
+        if h_full != h_local and h_local > 0:
+            # Determine TP rank from the head dimension mismatch
+            # With ColwiseParallel, heads are sharded sequentially
+            tp_size = h_full // h_local
+            try:
+                import torch.distributed as dist
+                if dist.is_initialized():
+                    tp_rank = dist.get_rank() % tp_size
+                else:
+                    # Fallback: assume rank 0 if dist not initialized
+                    tp_rank = 0
+            except (ImportError, RuntimeError):
+                # Fallback: assume rank 0 if dist not available
+                tp_rank = 0
+            
+            # Slice positional embeddings to match local heads
+            start_idx = tp_rank * h_local
+            end_idx = start_idx + h_local
+            cos_freqs = cos_freqs[:, start_idx:end_idx, :, :]
+            sin_freqs = sin_freqs[:, start_idx:end_idx, :, :]
+    
     if input_tensor.ndim != 4 and cos_freqs.ndim == 4:
+        # After potential slicing, cos_freqs has h_local heads
         b, h, t, _ = cos_freqs.shape
         input_tensor = input_tensor.reshape(b, t, h, -1).swapaxes(1, 2)
         needs_reshape = True
