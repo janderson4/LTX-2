@@ -43,13 +43,19 @@ def shard_norm(norm, mesh):
         return
 
     if hasattr(norm, "weight") and norm.weight is not None:
-        norm.weight.data = distribute_tensor(norm.weight.data, mesh, [Shard(-1)])
+        sharded_weight = distribute_tensor(norm.weight.data, mesh, [Shard(-1)])
+        norm.weight = torch.nn.Parameter(sharded_weight, requires_grad=norm.weight.requires_grad)
     if hasattr(norm, "bias") and norm.bias is not None:
-        norm.bias.data = distribute_tensor(norm.bias.data, mesh, [Shard(-1)])
+        sharded_bias = distribute_tensor(norm.bias.data, mesh, [Shard(-1)])
+        norm.bias = torch.nn.Parameter(sharded_bias, requires_grad=norm.bias.requires_grad)
 
     if isinstance(norm, torch.nn.RMSNorm):
         def _get_local(tensor: torch.Tensor) -> torch.Tensor:
-            return tensor.to_local() if isinstance(tensor, DTensor) else tensor
+            if isinstance(tensor, DTensor):
+                return tensor.to_local()
+            if hasattr(tensor, "data") and isinstance(tensor.data, DTensor):
+                return tensor.data.to_local()
+            return tensor
 
         def sharded_rmsnorm(x: torch.Tensor) -> torch.Tensor:
             x_local = _get_local(x)
@@ -65,14 +71,18 @@ def shard_norm(norm, mesh):
                 y_local = y_local + _get_local(norm.bias)
 
             if isinstance(x, DTensor):
-                return distribute_tensor(y_local, mesh, [Shard(-1)])
+                return DTensor.from_local(y_local, mesh, [Shard(-1)])
             return y_local
 
         norm.forward = sharded_rmsnorm
     else:
         # Update the module's expected shape so the runtime check passes
         if hasattr(norm, "normalized_shape"):
-            local_size = norm.weight.data.size(-1)
+            weight_tensor = norm.weight.data
+            if isinstance(weight_tensor, DTensor):
+                local_size = weight_tensor.to_local().size(-1)
+            else:
+                local_size = weight_tensor.size(-1)
             norm.normalized_shape = (local_size,)
 
     norm._tp_sharded = True
