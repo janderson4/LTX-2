@@ -81,7 +81,12 @@ class SingleGPUModelBuilder(Generic[ModelType], ModelBuilderProtocol[ModelType],
             sd = model_state_dict.sd
             if dtype is not None:
                 sd = {key: value.to(dtype=dtype) for key, value in model_state_dict.sd.items()}
-            meta_model.load_state_dict(sd, strict=False, assign=True)
+            incompatible = meta_model.load_state_dict(sd, strict=False, assign=True)
+            # If something failed to load, it may remain on meta and crash later during .to(...)
+            if incompatible.missing_keys:
+                logger.warning(f"Missing keys while loading model weights: {incompatible.missing_keys}")
+            if incompatible.unexpected_keys:
+                logger.warning(f"Unexpected keys while loading model weights: {incompatible.unexpected_keys}")
             return self._return_model(meta_model, device)
 
         lora_state_dicts = [
@@ -97,5 +102,11 @@ class SingleGPUModelBuilder(Generic[ModelType], ModelBuilderProtocol[ModelType],
             dtype=dtype,
             destination_sd=model_state_dict if isinstance(self.registry, DummyRegistry) else None,
         )
-        meta_model.load_state_dict(final_sd.sd, strict=False, assign=True)
+        incompatible = meta_model.load_state_dict(final_sd.sd, strict=False, assign=True)
+        if incompatible.missing_keys:
+            logger.warning(f"Missing keys while loading model weights (after LoRA fusion): {incompatible.missing_keys}")
+        if incompatible.unexpected_keys:
+            logger.warning(
+                f"Unexpected keys while loading model weights (after LoRA fusion): {incompatible.unexpected_keys}"
+            )
         return self._return_model(meta_model, device)

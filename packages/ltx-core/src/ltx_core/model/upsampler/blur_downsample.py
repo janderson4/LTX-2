@@ -26,7 +26,12 @@ class BlurDownsample(torch.nn.Module):
         # the 4th row of Pascal's triangle. This kernel is used for anti-aliasing and
         # provides a smooth approximation of a Gaussian filter (often called a "binomial filter").
         # The 2D kernel is constructed as the outer product and normalized.
-        k = torch.tensor([math.comb(kernel_size - 1, k) for k in range(kernel_size)])
+        # NOTE: This module can be instantiated under `torch.device("meta")` via our model builders.
+        # If we create this tensor on the default device in that context, it becomes a meta tensor and
+        # may not be materialized by `load_state_dict`, leading to:
+        # "Cannot copy out of meta tensor; no data!" when moving the model to CUDA.
+        # Keep this tiny constant buffer on CPU explicitly so it is always real and movable.
+        k = torch.tensor([math.comb(kernel_size - 1, k) for k in range(kernel_size)], device="cpu")
         k2d = k[:, None] @ k[None, :]
         k2d = (k2d / k2d.sum()).float()  # shape (kernel_size, kernel_size)
         self.register_buffer("kernel", k2d[None, None, :, :])  # (1, 1, kernel_size, kernel_size)

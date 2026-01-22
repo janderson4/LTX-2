@@ -113,9 +113,10 @@ class ModelLedger:
             # Enable persistent cache to avoid recompilation across runs
             torch._inductor.config.fx_graph_cache = True
 
-            # Blackwell Optimization: Use max-autotune for high-throughput
+            # Balanced Optimization: Use "default" instead of "max-autotune" for much faster startup.
+            # Even in default mode, torch.compile will use Triton to generate SM 10.0 optimized kernels.
             self.compile_kwargs = {
-                "mode": "max-autotune" if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10 else "default",
+                "mode": "default",
                 "dynamic": True,
             }
         else:
@@ -268,10 +269,8 @@ class ModelLedger:
             )
 
         model = self.text_encoder_builder.build(device=self._target_device(), dtype=self.dtype).to(self.device).eval()
-        # Text encoder is often left uncompiled due to string processing/tokenization, 
-        # but the heavy feature extraction can be compiled.
-        if self.compile:
-            model = torch.compile(model, **self.compile_kwargs)
+        # Text encoder is often left uncompiled due to string processing/tokenization
+        # providing low ROI for compilation time.
         self._cache["text_encoder"] = model
         return model
 

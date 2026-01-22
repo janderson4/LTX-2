@@ -30,7 +30,10 @@ class BasicAVTransformerBlock(torch.nn.Module):
     ):
         super().__init__()
 
-        self.register_buffer("idx", torch.tensor(idx, dtype=torch.int32))
+        # NOTE: This value is only used for Python-side perturbation logic (masking/skipping blocks).
+        # Storing it as a Tensor causes issues when the model is instantiated under `torch.device("meta")`
+        # (the tensor becomes a meta tensor and later `.to(device)` will fail).
+        self.idx: int = int(idx)
         if video is not None:
             self.attn1 = Attention(
                 query_dim=video.dim,
