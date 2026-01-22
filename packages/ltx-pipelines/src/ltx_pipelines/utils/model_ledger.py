@@ -116,7 +116,7 @@ class ModelLedger:
             # Balanced Optimization: Use "default" instead of "max-autotune" for much faster startup.
             # Even in default mode, torch.compile will use Triton to generate SM 10.0 optimized kernels.
             self.compile_kwargs = {
-                "mode": "default",
+                "mode": "max-autotune",
                 "dynamic": True,
             }
         else:
