@@ -64,8 +64,8 @@ class GemmaTextEncoderModelBase(torch.nn.Module):
             tuple[torch.Tensor, dict[str, torch.Tensor]]: Encoded features and a dictionary with attention mask.
         """
         token_pairs = self.tokenizer.tokenize_with_weights(text)["gemma"]
-        input_ids = torch.tensor([[t[0] for t in token_pairs]], device=self.model.device)
-        attention_mask = torch.tensor([[w[1] for w in token_pairs]], device=self.model.device)
+        input_ids = torch.tensor([[t[0] for t in token_pairs]], device=self.model.device, dtype=torch.long)
+        attention_mask = torch.tensor([[w[1] for w in token_pairs]], device=self.model.device, dtype=torch.long)
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
         projected = self._run_feature_extractor(
             hidden_states=outputs.hidden_states, attention_mask=attention_mask, padding_side=padding_side

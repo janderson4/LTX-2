@@ -53,7 +53,8 @@ class LTXVGemmaTokenizer:
         input_ids = encoded.input_ids
         attention_mask = encoded.attention_mask
         tuples = [
-            (token_id, attn, i) for i, (token_id, attn) in enumerate(zip(input_ids[0], attention_mask[0], strict=True))
+            (int(token_id.item()), int(attn.item()), i)
+            for i, (token_id, attn) in enumerate(zip(input_ids[0], attention_mask[0], strict=True))
         ]
         out = {"gemma": tuples}
 
