@@ -113,13 +113,11 @@ class ModelLedger:
             # Enable persistent cache to avoid recompilation across runs
             torch._inductor.config.fx_graph_cache = True
 
-            # Blackwell Optimization: Use max-autotune and CUDA graphs for high-throughput
+            # Blackwell Optimization: Use max-autotune for high-throughput
             self.compile_kwargs = {
                 "mode": "max-autotune" if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10 else "default",
                 "dynamic": True,
             }
-            if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
-                self.compile_kwargs["options"] = {"triton.cudagraphs": True}
         else:
             self.compile_kwargs = {}
 
