@@ -55,6 +55,7 @@ class ICLoraPipeline:
         loras: list[LoraPathStrengthAndSDOps],
         device: torch.device = device,
         fp8transformer: bool = False,
+        compile: bool = False,
     ):
         self.dtype = torch.bfloat16
         self.stage_1_model_ledger = ModelLedger(
@@ -65,6 +66,7 @@ class ICLoraPipeline:
             gemma_root_path=gemma_root,
             loras=loras,
             fp8transformer=fp8transformer,
+            compile=compile,
         )
         self.stage_2_model_ledger = ModelLedger(
             dtype=self.dtype,
@@ -74,6 +76,7 @@ class ICLoraPipeline:
             gemma_root_path=gemma_root,
             loras=[],
             fp8transformer=fp8transformer,
+            compile=compile,
         )
         self.pipeline_components = PipelineComponents(
             dtype=self.dtype,
@@ -110,7 +113,6 @@ class ICLoraPipeline:
             )
         video_context, audio_context = encode_text(text_encoder, prompts=[prompt])[0]
 
-        torch.cuda.synchronize()
         del text_encoder
         cleanup_memory()
 
@@ -161,7 +163,6 @@ class ICLoraPipeline:
             device=self.device,
         )
 
-        torch.cuda.synchronize()
         del transformer
         cleanup_memory()
 
@@ -172,7 +173,6 @@ class ICLoraPipeline:
             upsampler=self.stage_2_model_ledger.spatial_upsampler(),
         )
 
-        torch.cuda.synchronize()
         cleanup_memory()
 
         transformer = self.stage_2_model_ledger.transformer()
@@ -218,7 +218,6 @@ class ICLoraPipeline:
             initial_audio_latent=audio_state.latent,
         )
 
-        torch.cuda.synchronize()
         del transformer
         del video_encoder
         cleanup_memory()
@@ -282,6 +281,7 @@ def main() -> None:
         gemma_root=args.gemma_root,
         loras=args.lora,
         fp8transformer=args.enable_fp8,
+        compile=args.compile,
     )
     tiling_config = TilingConfig.default()
     video_chunks_number = get_video_chunks_number(args.num_frames, tiling_config)
@@ -308,4 +308,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     main()

@@ -132,6 +132,11 @@ class AttentionFunction(Enum):
         elif self is AttentionFunction.FLASH_ATTENTION_3:
             return FlashAttention3()(q, k, v, heads, mask)
         else:
+            # Blackwell Optimization: Prioritize FlashAttention3 for SM 100+ (Blackwell)
+            if flash_attn_interface is not None and torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+                 if mask is None:
+                     return FlashAttention3()(q, k, v, heads, mask)
+            
             # Default behavior: XFormers if installed else - PyTorch
             return (
                 XFormersAttention()(q, k, v, heads, mask)

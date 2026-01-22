@@ -47,6 +47,7 @@ class TI2VidOneStagePipeline:
         loras: list[LoraPathStrengthAndSDOps],
         device: torch.device = device,
         fp8transformer: bool = False,
+        compile: bool = False,
     ):
         self.dtype = torch.bfloat16
         self.device = device
@@ -57,12 +58,14 @@ class TI2VidOneStagePipeline:
             gemma_root_path=gemma_root,
             loras=loras,
             fp8transformer=fp8transformer,
+            compile=compile,
         )
         self.pipeline_components = PipelineComponents(
             dtype=self.dtype,
             device=device,
         )
 
+    @torch.inference_mode()
     def __call__(  # noqa: PLR0913
         self,
         prompt: str,
@@ -94,7 +97,6 @@ class TI2VidOneStagePipeline:
         v_context_p, a_context_p = context_p
         v_context_n, a_context_n = context_n
 
-        torch.cuda.synchronize()
         del text_encoder
         cleanup_memory()
 
@@ -143,7 +145,6 @@ class TI2VidOneStagePipeline:
             device=self.device,
         )
 
-        torch.cuda.synchronize()
         del transformer
         cleanup_memory()
 
@@ -165,6 +166,7 @@ def main() -> None:
         gemma_root=args.gemma_root,
         loras=args.lora,
         fp8transformer=args.enable_fp8,
+        compile=args.compile,
     )
     video, audio = pipeline(
         prompt=args.prompt,
@@ -190,4 +192,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     main()

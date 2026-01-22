@@ -1,6 +1,9 @@
+import weakref
 from dataclasses import replace
 
 import torch
+import torch._dynamo
+import torch._inductor.config
 
 from ltx_core.loader.primitives import LoraPathStrengthAndSDOps
 from ltx_core.loader.registry import DummyRegistry, Registry
@@ -104,6 +107,23 @@ class ModelLedger:
         self.registry = registry or DummyRegistry()
         self.fp8transformer = fp8transformer
         self.compile = compile
+        if self.compile:
+            # Fix HINT: torch.compile considers integer attributes of the nn.Module to be static.
+            torch._dynamo.config.allow_unspec_int_on_nn_module = True
+            # Enable persistent cache to avoid recompilation across runs
+            torch._inductor.config.fx_graph_cache = True
+
+            # Blackwell Optimization: Use max-autotune and CUDA graphs for high-throughput
+            self.compile_kwargs = {
+                "mode": "max-autotune" if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10 else "default",
+                "dynamic": True,
+            }
+            if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10:
+                self.compile_kwargs["options"] = {"triton.cudagraphs": True}
+        else:
+            self.compile_kwargs = {}
+
+        self._cache = {}
         self.build_model_builders()
 
     def build_model_builders(self) -> None:
@@ -167,7 +187,7 @@ class ModelLedger:
             return torch.device("cpu")
 
     def with_loras(self, loras: LoraPathStrengthAndSDOps) -> "ModelLedger":
-        return ModelLedger(
+        ledger = ModelLedger(
             dtype=self.dtype,
             device=self.device,
             checkpoint_path=self.checkpoint_path,
@@ -178,8 +198,14 @@ class ModelLedger:
             fp8transformer=self.fp8transformer,
             compile=self.compile,
         )
+        # Share the same cache dictionary for non-transformer components
+        ledger._cache = self._cache
+        return ledger
 
     def transformer(self) -> X0Model:
+        if hasattr(self, "_transformer_instance"):
+            return self._transformer_instance
+
         if not hasattr(self, "transformer_builder"):
             raise ValueError(
                 "Transformer not initialized. Please provide a checkpoint path to the ModelLedger constructor."
@@ -199,10 +225,14 @@ class ModelLedger:
             )
 
         if self.compile:
-            model = torch.compile(model)
+            model = torch.compile(model, **self.compile_kwargs)
+        self._transformer_instance = model
         return model
 
     def video_decoder(self) -> VideoDecoder:
+        if "video_decoder" in self._cache:
+            return self._cache["video_decoder"]
+
         if not hasattr(self, "vae_decoder_builder"):
             raise ValueError(
                 "Video decoder not initialized. Please provide a checkpoint path to the ModelLedger constructor."
@@ -210,10 +240,14 @@ class ModelLedger:
 
         model = self.vae_decoder_builder.build(device=self._target_device(), dtype=self.dtype).to(self.device).eval()
         if self.compile:
-            model = torch.compile(model)
+            model = torch.compile(model, **self.compile_kwargs)
+        self._cache["video_decoder"] = model
         return model
 
     def video_encoder(self) -> VideoEncoder:
+        if "video_encoder" in self._cache:
+            return self._cache["video_encoder"]
+
         if not hasattr(self, "vae_encoder_builder"):
             raise ValueError(
                 "Video encoder not initialized. Please provide a checkpoint path to the ModelLedger constructor."
@@ -221,10 +255,14 @@ class ModelLedger:
 
         model = self.vae_encoder_builder.build(device=self._target_device(), dtype=self.dtype).to(self.device).eval()
         if self.compile:
-            model = torch.compile(model)
+            model = torch.compile(model, **self.compile_kwargs)
+        self._cache["video_encoder"] = model
         return model
 
     def text_encoder(self) -> AVGemmaTextEncoderModel:
+        if "text_encoder" in self._cache:
+            return self._cache["text_encoder"]
+
         if not hasattr(self, "text_encoder_builder"):
             raise ValueError(
                 "Text encoder not initialized. Please provide a checkpoint path and gemma root path to the "
@@ -235,10 +273,14 @@ class ModelLedger:
         # Text encoder is often left uncompiled due to string processing/tokenization, 
         # but the heavy feature extraction can be compiled.
         if self.compile:
-            model = torch.compile(model)
+            model = torch.compile(model, **self.compile_kwargs)
+        self._cache["text_encoder"] = model
         return model
 
     def audio_decoder(self) -> AudioDecoder:
+        if "audio_decoder" in self._cache:
+            return self._cache["audio_decoder"]
+
         if not hasattr(self, "audio_decoder_builder"):
             raise ValueError(
                 "Audio decoder not initialized. Please provide a checkpoint path to the ModelLedger constructor."
@@ -246,10 +288,14 @@ class ModelLedger:
 
         model = self.audio_decoder_builder.build(device=self._target_device(), dtype=self.dtype).to(self.device).eval()
         if self.compile:
-            model = torch.compile(model)
+            model = torch.compile(model, **self.compile_kwargs)
+        self._cache["audio_decoder"] = model
         return model
 
     def vocoder(self) -> Vocoder:
+        if "vocoder" in self._cache:
+            return self._cache["vocoder"]
+
         if not hasattr(self, "vocoder_builder"):
             raise ValueError(
                 "Vocoder not initialized. Please provide a checkpoint path to the ModelLedger constructor."
@@ -257,14 +303,19 @@ class ModelLedger:
 
         model = self.vocoder_builder.build(device=self._target_device(), dtype=self.dtype).to(self.device).eval()
         if self.compile:
-            model = torch.compile(model)
+            model = torch.compile(model, **self.compile_kwargs)
+        self._cache["vocoder"] = model
         return model
 
     def spatial_upsampler(self) -> LatentUpsampler:
+        if "spatial_upsampler" in self._cache:
+            return self._cache["spatial_upsampler"]
+
         if not hasattr(self, "upsampler_builder"):
             raise ValueError("Upsampler not initialized. Please provide upsampler path to the ModelLedger constructor.")
 
         model = self.upsampler_builder.build(device=self._target_device(), dtype=self.dtype).to(self.device).eval()
         if self.compile:
-            model = torch.compile(model)
+            model = torch.compile(model, **self.compile_kwargs)
+        self._cache["spatial_upsampler"] = model
         return model

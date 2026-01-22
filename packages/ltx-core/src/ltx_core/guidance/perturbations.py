@@ -21,12 +21,15 @@ class Perturbation:
     type: PerturbationType
     blocks: list[int] | None  # None means all blocks
 
-    def is_perturbed(self, perturbation_type: PerturbationType, block: int) -> bool:
+    def is_perturbed(self, perturbation_type: PerturbationType, block: int | torch.Tensor) -> bool:
         if self.type != perturbation_type:
             return False
 
         if self.blocks is None:
             return True
+
+        if isinstance(block, torch.Tensor):
+            return any(block == b for b in self.blocks)
 
         return block in self.blocks
 
@@ -55,7 +58,11 @@ class BatchedPerturbationConfig:
     perturbations: list[PerturbationConfig]
 
     def mask(
-        self, perturbation_type: PerturbationType, block: int, device: DeviceLikeType, dtype: torch.dtype
+        self,
+        perturbation_type: PerturbationType,
+        block: int | torch.Tensor,
+        device: DeviceLikeType,
+        dtype: torch.dtype,
     ) -> torch.Tensor:
         mask = torch.ones((len(self.perturbations),), device=device, dtype=dtype)
         for batch_idx, perturbation in enumerate(self.perturbations):
@@ -64,14 +71,16 @@ class BatchedPerturbationConfig:
 
         return mask
 
-    def mask_like(self, perturbation_type: PerturbationType, block: int, values: torch.Tensor) -> torch.Tensor:
+    def mask_like(
+        self, perturbation_type: PerturbationType, block: int | torch.Tensor, values: torch.Tensor
+    ) -> torch.Tensor:
         mask = self.mask(perturbation_type, block, values.device, values.dtype)
         return mask.view(mask.numel(), *([1] * len(values.shape[1:])))
 
-    def any_in_batch(self, perturbation_type: PerturbationType, block: int) -> bool:
+    def any_in_batch(self, perturbation_type: PerturbationType, block: int | torch.Tensor) -> bool:
         return any(perturbation.is_perturbed(perturbation_type, block) for perturbation in self.perturbations)
 
-    def all_in_batch(self, perturbation_type: PerturbationType, block: int) -> bool:
+    def all_in_batch(self, perturbation_type: PerturbationType, block: int | torch.Tensor) -> bool:
         return all(perturbation.is_perturbed(perturbation_type, block) for perturbation in self.perturbations)
 
     @staticmethod

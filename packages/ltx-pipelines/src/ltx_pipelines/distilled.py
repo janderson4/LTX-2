@@ -72,6 +72,7 @@ class DistilledPipeline:
             device=device,
         )
 
+    @torch.inference_mode()
     def __call__(
         self,
         prompt: str,
@@ -97,7 +98,6 @@ class DistilledPipeline:
         context_p = encode_text(text_encoder, prompts=[prompt])[0]
         video_context, audio_context = context_p
 
-        torch.cuda.synchronize()
         del text_encoder
         cleanup_memory()
 
@@ -154,7 +154,6 @@ class DistilledPipeline:
             latent=video_state.latent[:1], video_encoder=video_encoder, upsampler=self.model_ledger.spatial_upsampler()
         )
 
-        torch.cuda.synchronize()
         cleanup_memory()
 
         stage_2_sigmas = torch.Tensor(STAGE_2_DISTILLED_SIGMA_VALUES).to(self.device)
@@ -182,7 +181,6 @@ class DistilledPipeline:
             initial_audio_latent=audio_state.latent,
         )
 
-        torch.cuda.synchronize()
         del transformer
         del video_encoder
         cleanup_memory()
@@ -234,4 +232,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     main()

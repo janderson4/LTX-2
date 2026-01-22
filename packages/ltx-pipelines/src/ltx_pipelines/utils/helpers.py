@@ -32,10 +32,22 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
-def cleanup_memory() -> None:
+def cleanup_memory(threshold_gb: float = 1.0) -> None:
+    """
+    Clean up memory by collecting garbage and optionally clearing the CUDA cache.
+    On high-VRAM cards (like RTX 6000 Ada), clearing the CUDA cache can be
+    counter-productive as it causes synchronizations and re-allocations.
+    Args:
+        threshold_gb: Only clear cache if free memory is below this threshold (in GB).
+                      Set to a very high value to always clear, or 0 to never clear.
+    """
     gc.collect()
-    torch.cuda.empty_cache()
-    torch.cuda.synchronize()
+    if torch.cuda.is_available():
+        free_mem, total_mem = torch.cuda.mem_get_info()
+        free_gb = free_mem / (1024**3)
+        if free_gb < threshold_gb:
+            torch.cuda.empty_cache()
+        torch.cuda.synchronize()
 
 
 def image_conditionings_by_replacing_latent(

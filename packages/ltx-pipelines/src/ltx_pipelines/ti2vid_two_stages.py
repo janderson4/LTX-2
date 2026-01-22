@@ -53,8 +53,9 @@ class TI2VidTwoStagesPipeline:
         spatial_upsampler_path: str,
         gemma_root: str,
         loras: list[LoraPathStrengthAndSDOps],
-        device: str = device,
+        device: torch.device = device,
         fp8transformer: bool = False,
+        compile: bool = False,
     ):
         self.device = device
         self.dtype = torch.bfloat16
@@ -66,6 +67,7 @@ class TI2VidTwoStagesPipeline:
             spatial_upsampler_path=spatial_upsampler_path,
             loras=loras,
             fp8transformer=fp8transformer,
+            compile=compile,
         )
 
         self.stage_2_model_ledger = self.stage_1_model_ledger.with_loras(
@@ -110,7 +112,6 @@ class TI2VidTwoStagesPipeline:
         v_context_p, a_context_p = context_p
         v_context_n, a_context_n = context_n
 
-        torch.cuda.synchronize()
         del text_encoder
         cleanup_memory()
 
@@ -164,7 +165,6 @@ class TI2VidTwoStagesPipeline:
             device=self.device,
         )
 
-        torch.cuda.synchronize()
         del transformer
         cleanup_memory()
 
@@ -175,7 +175,6 @@ class TI2VidTwoStagesPipeline:
             upsampler=self.stage_2_model_ledger.spatial_upsampler(),
         )
 
-        torch.cuda.synchronize()
         cleanup_memory()
 
         transformer = self.stage_2_model_ledger.transformer()
@@ -220,7 +219,6 @@ class TI2VidTwoStagesPipeline:
             initial_audio_latent=audio_state.latent,
         )
 
-        torch.cuda.synchronize()
         del transformer
         del video_encoder
         cleanup_memory()
@@ -247,6 +245,7 @@ def main() -> None:
         gemma_root=args.gemma_root,
         loras=args.lora,
         fp8transformer=args.enable_fp8,
+        compile=args.compile,
     )
     tiling_config = TilingConfig.default()
     video_chunks_number = get_video_chunks_number(args.num_frames, tiling_config)
@@ -275,4 +274,6 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     main()

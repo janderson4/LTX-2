@@ -30,7 +30,7 @@ class BasicAVTransformerBlock(torch.nn.Module):
     ):
         super().__init__()
 
-        self.idx = idx
+        self.register_buffer("idx", torch.tensor(idx, dtype=torch.int32))
         if video is not None:
             self.attn1 = Attention(
                 query_dim=video.dim,
