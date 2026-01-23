@@ -491,6 +491,10 @@ def decode_audio(latent: torch.Tensor, audio_decoder: "AudioDecoder", vocoder: "
     # output buffers from being reused/overwritten across calls.
     _maybe_cudagraph_mark_step_begin()
     decoded_audio = audio_decoder(latent)
+    # If `audio_decoder` is torch.compile'd with CUDA Graphs, its output may alias
+    # a graph-managed buffer. Clone before feeding it into another compiled model
+    # (e.g. the vocoder) to avoid "overwritten by a subsequent run" errors.
+    decoded_audio = decoded_audio.clone()
     _maybe_cudagraph_mark_step_begin()
     # Ensure the returned waveform owns its storage (avoid holding onto an
     # internal CUDA Graph output buffer that may be overwritten on replay).

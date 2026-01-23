@@ -293,8 +293,16 @@ class ModelLedger:
             )
 
         model = self.audio_decoder_builder.build(device=self._target_device(), dtype=self.dtype).to(self.device).eval()
-        if self.compile:
+        # torch.compile for audio components can trigger CUDA Graph lifetime issues
+        # when outputs of one compiled model are fed into another (see
+        # "accessing tensor output of CUDAGraphs that has been overwritten...").
+        # Keep pipelines stable by default; allow opt-in via env var.
+        if self.compile and os.environ.get("LTX_TORCH_COMPILE_AUDIO_DECODER", "0").lower() in ("1", "true", "yes", "on"):
             model = torch.compile(model, **self.compile_kwargs)
+        elif self.compile:
+            logger.info(
+                "Skipping torch.compile for audio decoder (set LTX_TORCH_COMPILE_AUDIO_DECODER=1 to enable)."
+            )
         self._cache["audio_decoder"] = model
         return model
 
@@ -308,8 +316,10 @@ class ModelLedger:
             )
 
         model = self.vocoder_builder.build(device=self._target_device(), dtype=self.dtype).to(self.device).eval()
-        if self.compile:
+        if self.compile and os.environ.get("LTX_TORCH_COMPILE_VOCODER", "0").lower() in ("1", "true", "yes", "on"):
             model = torch.compile(model, **self.compile_kwargs)
+        elif self.compile:
+            logger.info("Skipping torch.compile for vocoder (set LTX_TORCH_COMPILE_VOCODER=1 to enable).")
         self._cache["vocoder"] = model
         return model
 
