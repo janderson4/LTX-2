@@ -465,6 +465,18 @@ class AudioDecoder(torch.nn.Module):
         return torch.tanh(h) if self.tanh_out else h
 
 
+def _maybe_cudagraph_mark_step_begin() -> None:
+    """
+    Torch Inductor may use CUDA Graphs under the hood for torch.compile'd models.
+    When chaining multiple compiled model invocations, CUDA Graph outputs can be
+    overwritten by subsequent replays unless a new "step" boundary is marked.
+    """
+    compiler_mod = getattr(torch, "compiler", None)
+    mark = getattr(compiler_mod, "cudagraph_mark_step_begin", None) if compiler_mod is not None else None
+    if callable(mark):
+        mark()
+
+
 def decode_audio(latent: torch.Tensor, audio_decoder: "AudioDecoder", vocoder: "Vocoder") -> torch.Tensor:
     """
     Decode an audio latent representation using the provided audio decoder and vocoder.
@@ -475,6 +487,12 @@ def decode_audio(latent: torch.Tensor, audio_decoder: "AudioDecoder", vocoder: "
     Returns:
         Decoded audio as a float tensor.
     """
+    # Mark boundaries between compiled model invocations to prevent CUDA Graph
+    # output buffers from being reused/overwritten across calls.
+    _maybe_cudagraph_mark_step_begin()
     decoded_audio = audio_decoder(latent)
-    decoded_audio = vocoder(decoded_audio).squeeze(0).float()
+    _maybe_cudagraph_mark_step_begin()
+    # Ensure the returned waveform owns its storage (avoid holding onto an
+    # internal CUDA Graph output buffer that may be overwritten on replay).
+    decoded_audio = vocoder(decoded_audio).squeeze(0).to(torch.float32).clone()
     return decoded_audio

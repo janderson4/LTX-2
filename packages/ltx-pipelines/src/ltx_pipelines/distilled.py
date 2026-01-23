@@ -1,4 +1,5 @@
 import logging
+import time
 from collections.abc import Iterator
 
 import torch
@@ -95,8 +96,13 @@ class DistilledPipeline:
         text_encoder = self.model_ledger.text_encoder()
         if enhance_prompt:
             prompt = generate_enhanced_prompt(text_encoder, prompt, images[0][0] if len(images) > 0 else None)
+        
+        start_time = time.perf_counter()
         context_p = encode_text(text_encoder, prompts=[prompt])[0]
         video_context, audio_context = context_p
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        print(f"✨ Text encoding took: {time.perf_counter() - start_time:.2f}s")
 
         del text_encoder
         cleanup_memory()
@@ -137,6 +143,7 @@ class DistilledPipeline:
             device=self.device,
         )
 
+        start_time = time.perf_counter()
         video_state, audio_state = denoise_audio_video(
             output_shape=stage_1_output_shape,
             conditionings=stage_1_conditionings,
@@ -148,11 +155,18 @@ class DistilledPipeline:
             dtype=dtype,
             device=self.device,
         )
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        print(f"🎬 Stage 1 (Low-Res) generation took: {time.perf_counter() - start_time:.2f}s")
 
         # Stage 2: Upsample and refine the video at higher resolution with distilled LORA.
+        start_time = time.perf_counter()
         upscaled_video_latent = upsample_video(
             latent=video_state.latent[:1], video_encoder=video_encoder, upsampler=self.model_ledger.spatial_upsampler()
         )
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        print(f"🔍 Upsampling took: {time.perf_counter() - start_time:.2f}s")
 
         cleanup_memory()
 
@@ -166,6 +180,7 @@ class DistilledPipeline:
             dtype=dtype,
             device=self.device,
         )
+        start_time = time.perf_counter()
         video_state, audio_state = denoise_audio_video(
             output_shape=stage_2_output_shape,
             conditionings=stage_2_conditionings,
@@ -180,17 +195,30 @@ class DistilledPipeline:
             initial_video_latent=upscaled_video_latent,
             initial_audio_latent=audio_state.latent,
         )
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        print(f"💎 Stage 2 (High-Res) refinement took: {time.perf_counter() - start_time:.2f}s")
 
         del transformer
         del video_encoder
         cleanup_memory()
 
+        start_time = time.perf_counter()
         decoded_video = vae_decode_video(
             video_state.latent, self.model_ledger.video_decoder(), tiling_config, generator
         )
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        print(f"🎥 Video decoding took: {time.perf_counter() - start_time:.2f}s")
+
+        start_time = time.perf_counter()
         decoded_audio = vae_decode_audio(
             audio_state.latent, self.model_ledger.audio_decoder(), self.model_ledger.vocoder()
         )
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        print(f"🎵 Audio decoding took: {time.perf_counter() - start_time:.2f}s")
+        return decoded_video, decoded_audio
         return decoded_video, decoded_audio
 
 
