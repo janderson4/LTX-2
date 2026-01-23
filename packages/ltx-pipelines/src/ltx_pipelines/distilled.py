@@ -2,6 +2,7 @@ import logging
 import os
 import time
 from collections.abc import Iterator
+from dataclasses import replace
 
 import torch
 
@@ -225,7 +226,6 @@ class DistilledPipeline:
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         print(f"🎵 Audio decoding took: {time.perf_counter() - start_time:.2f}s")
-        return decoded_video, decoded_audio
         return decoded_video, decoded_audio
 
 
