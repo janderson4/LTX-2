@@ -1,4 +1,5 @@
 import itertools
+import os
 from dataclasses import dataclass
 from typing import Callable, List, NamedTuple, Tuple
 
@@ -106,9 +107,39 @@ class TilingConfig:
 
     @classmethod
     def default(cls) -> "TilingConfig":
+        """
+        Default tiling configuration.
+
+        Can be overridden via environment variables (integers):
+        - LTX_TILING_SPATIAL_TILE_SIZE_PIXELS (default: 512)
+        - LTX_TILING_SPATIAL_TILE_OVERLAP_PIXELS (default: 64)
+        - LTX_TILING_TEMPORAL_TILE_SIZE_FRAMES (default: 64)
+        - LTX_TILING_TEMPORAL_TILE_OVERLAP_FRAMES (default: 24)
+        """
+
+        def _env_int(name: str, default: int) -> int:
+            raw = os.environ.get(name)
+            if raw is None or raw == "":
+                return default
+            try:
+                return int(raw)
+            except ValueError as e:
+                raise ValueError(f"Environment variable {name} must be an int, got {raw!r}") from e
+
+        spatial_tile = _env_int("LTX_TILING_SPATIAL_TILE_SIZE_PIXELS", 512)
+        spatial_overlap = _env_int("LTX_TILING_SPATIAL_TILE_OVERLAP_PIXELS", 64)
+        temporal_tile = _env_int("LTX_TILING_TEMPORAL_TILE_SIZE_FRAMES", 64)
+        temporal_overlap = _env_int("LTX_TILING_TEMPORAL_TILE_OVERLAP_FRAMES", 24)
+
         return cls(
-            spatial_config=SpatialTilingConfig(tile_size_in_pixels=512, tile_overlap_in_pixels=64),
-            temporal_config=TemporalTilingConfig(tile_size_in_frames=64, tile_overlap_in_frames=24),
+            spatial_config=SpatialTilingConfig(
+                tile_size_in_pixels=spatial_tile,
+                tile_overlap_in_pixels=spatial_overlap,
+            ),
+            temporal_config=TemporalTilingConfig(
+                tile_size_in_frames=temporal_tile,
+                tile_overlap_in_frames=temporal_overlap,
+            ),
         )
 
 

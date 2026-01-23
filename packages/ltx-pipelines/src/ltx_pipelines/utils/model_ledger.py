@@ -1,3 +1,5 @@
+import logging
+import os
 import weakref
 from dataclasses import replace
 
@@ -38,6 +40,8 @@ from ltx_core.text_encoders.gemma import (
     AVGemmaTextEncoderModelConfigurator,
     module_ops_from_gemma_root,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ModelLedger:
@@ -110,15 +114,20 @@ class ModelLedger:
         if self.compile:
             # Fix HINT: torch.compile considers integer attributes of the nn.Module to be static.
             torch._dynamo.config.allow_unspec_int_on_nn_module = True
+            # When compilation fails (often due to upstream PyTorch/Inductor limitations),
+            # fall back to eager execution instead of hard-crashing the pipeline.
+            #
+            # This is particularly important for the latent upsampler which uses view/rearrange
+            # patterns that can trigger symbolic-shape codegen assertions in some PyTorch versions.
+            torch._dynamo.config.suppress_errors = True
             # Enable persistent cache to avoid recompilation across runs
             torch._inductor.config.fx_graph_cache = True
 
-            # Balanced Optimization: Use "default" instead of "max-autotune" for much faster startup.
-            # Even in default mode, torch.compile will use Triton to generate SM 10.0 optimized kernels.
-            self.compile_kwargs = {
-                "mode": "max-autotune",
-                "dynamic": True,
-            }
+            # Balanced optimization: default to lower compile overhead / less noisy autotuning.
+            # Can be overridden via env vars for benchmarking.
+            mode = os.environ.get("LTX_TORCH_COMPILE_MODE", "default")
+            dynamic = os.environ.get("LTX_TORCH_COMPILE_DYNAMIC", "0").lower() in ("1", "true", "yes", "on")
+            self.compile_kwargs = {"mode": mode, "dynamic": dynamic}
         else:
             self.compile_kwargs = {}
 
@@ -312,7 +321,12 @@ class ModelLedger:
             raise ValueError("Upsampler not initialized. Please provide upsampler path to the ModelLedger constructor.")
 
         model = self.upsampler_builder.build(device=self._target_device(), dtype=self.dtype).to(self.device).eval()
-        if self.compile:
+        # The upsampler is relatively small, and compiling it is more likely to hit
+        # symbolic-shape/reshape edge-cases in Inductor than to produce large speedups.
+        # Allow opting in via env var.
+        if self.compile and os.environ.get("LTX_TORCH_COMPILE_UPSAMPLER", "0").lower() in ("1", "true", "yes", "on"):
             model = torch.compile(model, **self.compile_kwargs)
+        elif self.compile:
+            logger.info("Skipping torch.compile for spatial upsampler (set LTX_TORCH_COMPILE_UPSAMPLER=1 to enable).")
         self._cache["spatial_upsampler"] = model
         return model
