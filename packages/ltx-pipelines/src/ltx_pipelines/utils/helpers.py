@@ -1,5 +1,6 @@
 import gc
 import logging
+import time
 from dataclasses import replace
 
 import torch
@@ -142,6 +143,7 @@ def euler_denoising_loop(
         audio latent states after completing the denoising loop.
     """
     for step_idx, _ in enumerate(tqdm(sigmas[:-1])):
+        it_start = time.perf_counter()
         denoised_video, denoised_audio = denoise_fn(video_state, audio_state, sigmas, step_idx)
 
         denoised_video = post_process_latent(denoised_video, video_state.denoise_mask, video_state.clean_latent)
@@ -149,6 +151,10 @@ def euler_denoising_loop(
 
         video_state = replace(video_state, latent=stepper.step(video_state.latent, denoised_video, sigmas, step_idx))
         audio_state = replace(audio_state, latent=stepper.step(audio_state.latent, denoised_audio, sigmas, step_idx))
+        
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        print(f"  Step {step_idx:02d} took: {time.perf_counter() - it_start:.3f}s")
 
     return (video_state, audio_state)
 
@@ -192,6 +198,7 @@ def gradient_estimating_euler_denoising_loop(
         return current_velocity, denoised_sample
 
     for step_idx, _ in enumerate(tqdm(sigmas[:-1])):
+        it_start = time.perf_counter()
         denoised_video, denoised_audio = denoise_fn(video_state, audio_state, sigmas, step_idx)
 
         denoised_video = post_process_latent(denoised_video, video_state.denoise_mask, video_state.clean_latent)
@@ -209,6 +216,10 @@ def gradient_estimating_euler_denoising_loop(
 
         video_state = replace(video_state, latent=stepper.step(video_state.latent, denoised_video, sigmas, step_idx))
         audio_state = replace(audio_state, latent=stepper.step(audio_state.latent, denoised_audio, sigmas, step_idx))
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        print(f"  GE-Step {step_idx:02d} took: {time.perf_counter() - it_start:.3f}s")
 
     return (video_state, audio_state)
 

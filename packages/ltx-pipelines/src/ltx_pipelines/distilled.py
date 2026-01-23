@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from collections.abc import Iterator
 
@@ -166,38 +167,44 @@ class DistilledPipeline:
         )
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-        print(f"🔍 Upsampling took: {time.perf_counter() - start_time:.2f}s")
+        print(f"🔍 Upsampling (2x) took: {time.perf_counter() - start_time:.2f}s")
 
-        cleanup_memory()
+        skip_stage_2 = os.environ.get("SKIP_STAGE_2", "0").lower() in ("1", "true", "yes", "on")
+        if not skip_stage_2:
+            cleanup_memory()
 
-        stage_2_sigmas = torch.Tensor(STAGE_2_DISTILLED_SIGMA_VALUES).to(self.device)
-        stage_2_output_shape = VideoPixelShape(batch=1, frames=num_frames, width=width, height=height, fps=frame_rate)
-        stage_2_conditionings = image_conditionings_by_replacing_latent(
-            images=images,
-            height=stage_2_output_shape.height,
-            width=stage_2_output_shape.width,
-            video_encoder=video_encoder,
-            dtype=dtype,
-            device=self.device,
-        )
-        start_time = time.perf_counter()
-        video_state, audio_state = denoise_audio_video(
-            output_shape=stage_2_output_shape,
-            conditionings=stage_2_conditionings,
-            noiser=noiser,
-            sigmas=stage_2_sigmas,
-            stepper=stepper,
-            denoising_loop_fn=denoising_loop,
-            components=self.pipeline_components,
-            dtype=dtype,
-            device=self.device,
-            noise_scale=stage_2_sigmas[0],
-            initial_video_latent=upscaled_video_latent,
-            initial_audio_latent=audio_state.latent,
-        )
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        print(f"💎 Stage 2 (High-Res) refinement took: {time.perf_counter() - start_time:.2f}s")
+            stage_2_sigmas = torch.Tensor(STAGE_2_DISTILLED_SIGMA_VALUES).to(self.device)
+            stage_2_output_shape = VideoPixelShape(batch=1, frames=num_frames, width=width, height=height, fps=frame_rate)
+            stage_2_conditionings = image_conditionings_by_replacing_latent(
+                images=images,
+                height=stage_2_output_shape.height,
+                width=stage_2_output_shape.width,
+                video_encoder=video_encoder,
+                dtype=dtype,
+                device=self.device,
+            )
+            start_time = time.perf_counter()
+            video_state, audio_state = denoise_audio_video(
+                output_shape=stage_2_output_shape,
+                conditionings=stage_2_conditionings,
+                noiser=noiser,
+                sigmas=stage_2_sigmas,
+                stepper=stepper,
+                denoising_loop_fn=denoising_loop,
+                components=self.pipeline_components,
+                dtype=dtype,
+                device=self.device,
+                noise_scale=stage_2_sigmas[0],
+                initial_video_latent=upscaled_video_latent,
+                initial_audio_latent=audio_state.latent,
+            )
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            print(f"💎 Stage 2 (High-Res) refinement took: {time.perf_counter() - start_time:.2f}s")
+        else:
+            print("⏩ Skipping Stage 2 refinement (SKIP_STAGE_2=1), using raw upscaled latents.")
+            # Update the video state with the upscaled latent so decoding happens at full res
+            video_state = replace(video_state, latent=upscaled_video_latent)
 
         del transformer
         del video_encoder

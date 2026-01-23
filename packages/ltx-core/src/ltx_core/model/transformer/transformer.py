@@ -144,8 +144,12 @@ class BasicAVTransformerBlock(torch.nn.Module):
         perturbations: BatchedPerturbationConfig | None = None,
     ) -> tuple[TransformerArgs | None, TransformerArgs | None]:
         batch_size = video.x.shape[0]
-        if perturbations is None:
-            perturbations = BatchedPerturbationConfig.empty(batch_size)
+        # NOTE: `perturbations` is a Python object (lists + Python control flow).
+        # If we materialize an "empty" perturbation config here, `torch.compile`
+        # will still see/guard/recompile on that Python logic across blocks
+        # (e.g. `self.idx == 7`), even though nothing is actually perturbed.
+        # Keep `None` as the fast-path for inference.
+        no_perturbations = perturbations is None
 
         vx = video.x if video is not None else None
         ax = audio.x if audio is not None else None
@@ -160,9 +164,13 @@ class BasicAVTransformerBlock(torch.nn.Module):
             vshift_msa, vscale_msa, vgate_msa = self.get_ada_values(
                 self.scale_shift_table, vx.shape[0], video.timesteps, slice(0, 3)
             )
-            if not perturbations.all_in_batch(PerturbationType.SKIP_VIDEO_SELF_ATTN, self.idx):
+            if no_perturbations or not perturbations.all_in_batch(PerturbationType.SKIP_VIDEO_SELF_ATTN, self.idx):
                 norm_vx = rms_norm(vx, eps=self.norm_eps) * (1 + vscale_msa) + vshift_msa
-                v_mask = perturbations.mask_like(PerturbationType.SKIP_VIDEO_SELF_ATTN, self.idx, vx)
+                v_mask = (
+                    1.0
+                    if no_perturbations
+                    else perturbations.mask_like(PerturbationType.SKIP_VIDEO_SELF_ATTN, self.idx, vx)
+                )
                 vx = vx + self.attn1(norm_vx, pe=video.positional_embeddings) * vgate_msa * v_mask
 
             vx = vx + self.attn2(rms_norm(vx, eps=self.norm_eps), context=video.context, mask=video.context_mask)
@@ -174,9 +182,13 @@ class BasicAVTransformerBlock(torch.nn.Module):
                 self.audio_scale_shift_table, ax.shape[0], audio.timesteps, slice(0, 3)
             )
 
-            if not perturbations.all_in_batch(PerturbationType.SKIP_AUDIO_SELF_ATTN, self.idx):
+            if no_perturbations or not perturbations.all_in_batch(PerturbationType.SKIP_AUDIO_SELF_ATTN, self.idx):
                 norm_ax = rms_norm(ax, eps=self.norm_eps) * (1 + ascale_msa) + ashift_msa
-                a_mask = perturbations.mask_like(PerturbationType.SKIP_AUDIO_SELF_ATTN, self.idx, ax)
+                a_mask = (
+                    1.0
+                    if no_perturbations
+                    else perturbations.mask_like(PerturbationType.SKIP_AUDIO_SELF_ATTN, self.idx, ax)
+                )
                 ax = ax + self.audio_attn1(norm_ax, pe=audio.positional_embeddings) * agate_msa * a_mask
 
             ax = ax + self.audio_attn2(rms_norm(ax, eps=self.norm_eps), context=audio.context, mask=audio.context_mask)
@@ -217,7 +229,11 @@ class BasicAVTransformerBlock(torch.nn.Module):
             if run_a2v:
                 vx_scaled = vx_norm3 * (1 + scale_ca_video_hidden_states_a2v) + shift_ca_video_hidden_states_a2v
                 ax_scaled = ax_norm3 * (1 + scale_ca_audio_hidden_states_a2v) + shift_ca_audio_hidden_states_a2v
-                a2v_mask = perturbations.mask_like(PerturbationType.SKIP_A2V_CROSS_ATTN, self.idx, vx)
+                a2v_mask = (
+                    1.0
+                    if no_perturbations
+                    else perturbations.mask_like(PerturbationType.SKIP_A2V_CROSS_ATTN, self.idx, vx)
+                )
                 vx = vx + (
                     self.audio_to_video_attn(
                         vx_scaled,
@@ -232,7 +248,11 @@ class BasicAVTransformerBlock(torch.nn.Module):
             if run_v2a:
                 ax_scaled = ax_norm3 * (1 + scale_ca_audio_hidden_states_v2a) + shift_ca_audio_hidden_states_v2a
                 vx_scaled = vx_norm3 * (1 + scale_ca_video_hidden_states_v2a) + shift_ca_video_hidden_states_v2a
-                v2a_mask = perturbations.mask_like(PerturbationType.SKIP_V2A_CROSS_ATTN, self.idx, ax)
+                v2a_mask = (
+                    1.0
+                    if no_perturbations
+                    else perturbations.mask_like(PerturbationType.SKIP_V2A_CROSS_ATTN, self.idx, ax)
+                )
                 ax = ax + (
                     self.video_to_audio_attn(
                         ax_scaled,

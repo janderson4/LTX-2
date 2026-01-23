@@ -128,8 +128,18 @@ class ModelLedger:
             mode = os.environ.get("LTX_TORCH_COMPILE_MODE", "default")
             dynamic = os.environ.get("LTX_TORCH_COMPILE_DYNAMIC", "0").lower() in ("1", "true", "yes", "on")
             self.compile_kwargs = {"mode": mode, "dynamic": dynamic}
+            # The transformer sees highly variable sequence lengths (e.g. due to
+            # different #frames / tiling / conditioning). Compiling it with
+            # dynamic shapes avoids hitting recompile limits and repeated
+            # autotune/compile overhead.
+            transformer_dynamic = os.environ.get(
+                "LTX_TORCH_COMPILE_TRANSFORMER_DYNAMIC",
+                "1",
+            ).lower() in ("1", "true", "yes", "on")
+            self.transformer_compile_kwargs = {**self.compile_kwargs, "dynamic": transformer_dynamic}
         else:
             self.compile_kwargs = {}
+            self.transformer_compile_kwargs = {}
 
         self._cache = {}
         self.build_model_builders()
@@ -233,7 +243,7 @@ class ModelLedger:
             )
 
         if self.compile:
-            model = torch.compile(model, **self.compile_kwargs)
+            model = torch.compile(model, **self.transformer_compile_kwargs)
         self._transformer_instance = model
         return model
 
