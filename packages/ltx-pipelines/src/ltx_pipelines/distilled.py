@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import torch
 
+from ltx_core.conditioning.types.latent_cond import VideoConditionByLatentIndex
 from ltx_core.components.diffusion_steps import EulerDiffusionStep
 from ltx_core.components.noisers import GaussianNoiser
 from ltx_core.components.protocols import DiffusionStepProtocol
@@ -151,8 +152,30 @@ class DistilledPipeline:
 
         # Stage 2: Upsample and refine the video at higher resolution with distilled LORA.
         upscaled_video_latent = upsample_video(
-            latent=video_state.latent[:1], video_encoder=video_encoder, upsampler=self.model_ledger.spatial_upsampler()
+            latent=video_state.latent[:1],
+            video_encoder=video_encoder,
+            upsampler=self.model_ledger.spatial_upsampler(),
         )
+
+        stage_2_output_shape = VideoPixelShape(
+            batch=1, frames=num_frames, width=width, height=height, fps=frame_rate
+        )
+        stage_2_conditionings = image_conditionings_by_replacing_latent(
+            images=images,
+            height=stage_2_output_shape.height,
+            width=stage_2_output_shape.width,
+            video_encoder=video_encoder,
+            dtype=dtype,
+            device=self.device,
+        )
+
+        # Replace conditioned frames in upscaled_video_latent with full resolution encoded latents.
+        # This ensures that high-frequency details from the original images are preserved.
+        for cond in stage_2_conditionings:
+            if isinstance(cond, VideoConditionByLatentIndex):
+                upscaled_video_latent[
+                    :, :, cond.latent_idx : cond.latent_idx + 1
+                ] = cond.latent
 
         torch.cuda.synchronize()
         cleanup_memory()
@@ -162,17 +185,6 @@ class DistilledPipeline:
             video_state = replace(video_state, latent=upscaled_video_latent)
         else:
             stage_2_sigmas = torch.Tensor(STAGE_2_DISTILLED_SIGMA_VALUES).to(self.device)
-            stage_2_output_shape = VideoPixelShape(
-                batch=1, frames=num_frames, width=width, height=height, fps=frame_rate
-            )
-            stage_2_conditionings = image_conditionings_by_replacing_latent(
-                images=images,
-                height=stage_2_output_shape.height,
-                width=stage_2_output_shape.width,
-                video_encoder=video_encoder,
-                dtype=dtype,
-                device=self.device,
-            )
             video_state, audio_state = denoise_audio_video(
                 output_shape=stage_2_output_shape,
                 conditionings=stage_2_conditionings,
