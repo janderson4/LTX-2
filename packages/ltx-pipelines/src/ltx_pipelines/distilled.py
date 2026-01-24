@@ -1,5 +1,7 @@
 import logging
+import os
 from collections.abc import Iterator
+from dataclasses import replace
 
 import torch
 
@@ -155,38 +157,48 @@ class DistilledPipeline:
         torch.cuda.synchronize()
         cleanup_memory()
 
-        stage_2_sigmas = torch.Tensor(STAGE_2_DISTILLED_SIGMA_VALUES).to(self.device)
-        stage_2_output_shape = VideoPixelShape(batch=1, frames=num_frames, width=width, height=height, fps=frame_rate)
-        stage_2_conditionings = image_conditionings_by_replacing_latent(
-            images=images,
-            height=stage_2_output_shape.height,
-            width=stage_2_output_shape.width,
-            video_encoder=video_encoder,
-            dtype=dtype,
-            device=self.device,
-        )
-        video_state, audio_state = denoise_audio_video(
-            output_shape=stage_2_output_shape,
-            conditionings=stage_2_conditionings,
-            noiser=noiser,
-            sigmas=stage_2_sigmas,
-            stepper=stepper,
-            denoising_loop_fn=denoising_loop,
-            components=self.pipeline_components,
-            dtype=dtype,
-            device=self.device,
-            noise_scale=stage_2_sigmas[0],
-            initial_video_latent=upscaled_video_latent,
-            initial_audio_latent=audio_state.latent,
-        )
+        if os.environ.get("LTX_SKIP_STAGE2_DENOISING", "false").lower() == "true":
+            # Skip the second denoising pass and use the upscaled latent directly.
+            video_state = replace(video_state, latent=upscaled_video_latent)
+        else:
+            stage_2_sigmas = torch.Tensor(STAGE_2_DISTILLED_SIGMA_VALUES).to(self.device)
+            stage_2_output_shape = VideoPixelShape(
+                batch=1, frames=num_frames, width=width, height=height, fps=frame_rate
+            )
+            stage_2_conditionings = image_conditionings_by_replacing_latent(
+                images=images,
+                height=stage_2_output_shape.height,
+                width=stage_2_output_shape.width,
+                video_encoder=video_encoder,
+                dtype=dtype,
+                device=self.device,
+            )
+            video_state, audio_state = denoise_audio_video(
+                output_shape=stage_2_output_shape,
+                conditionings=stage_2_conditionings,
+                noiser=noiser,
+                sigmas=stage_2_sigmas,
+                stepper=stepper,
+                denoising_loop_fn=denoising_loop,
+                components=self.pipeline_components,
+                dtype=dtype,
+                device=self.device,
+                noise_scale=stage_2_sigmas[0],
+                initial_video_latent=upscaled_video_latent,
+                initial_audio_latent=audio_state.latent,
+            )
 
         torch.cuda.synchronize()
         del transformer
         del video_encoder
         cleanup_memory()
 
+        vae_decoder = self.model_ledger.video_decoder()
+        if (vae_noise_scale := os.environ.get("LTX_VAE_DECODE_NOISE_SCALE")) is not None:
+            vae_decoder.decode_noise_scale = float(vae_noise_scale)
+
         decoded_video = vae_decode_video(
-            video_state.latent, self.model_ledger.video_decoder(), tiling_config, generator
+            video_state.latent, vae_decoder, tiling_config, generator
         )
         decoded_audio = vae_decode_audio(
             audio_state.latent, self.model_ledger.audio_decoder(), self.model_ledger.vocoder()
