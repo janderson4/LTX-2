@@ -60,7 +60,8 @@ class VideoDecoderConfigurator(ModelConfigurator[VideoDecoder]):
         patch_size = config.get("patch_size", 4)
         norm_layer_str = config.get("norm_layer", "pixel_norm")
         causal = config.get("causal_decoder", False)
-        timestep_conditioning = config.get("timestep_conditioning", True)
+        # Default is False to match VideoDecoder.__init__ and to keep older checkpoints compatible.
+        timestep_conditioning = config.get("timestep_conditioning", False)
 
         # Allow runtime override of whether VAE decoder uses timestep conditioning.
         # Note: This must happen at build-time because enabling it adds parameters/modules.

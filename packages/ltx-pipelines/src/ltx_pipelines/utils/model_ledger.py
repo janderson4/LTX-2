@@ -2,6 +2,7 @@ from dataclasses import replace
 
 import logging
 import os
+from contextlib import contextmanager
 import torch
 
 from ltx_core.loader.primitives import LoraPathStrengthAndSDOps
@@ -203,11 +204,46 @@ class ModelLedger:
                 "Video decoder not initialized. Please provide a checkpoint path to the ModelLedger constructor."
             )
 
-        decoder = (
-            self.vae_decoder_builder.build(device=self._target_device(), dtype=self.dtype)
-            .to(self.device)
-            .eval()
-        )
+        @contextmanager
+        def _temp_env(key: str, value: str | None):
+            old = os.environ.get(key)
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+            try:
+                yield
+            finally:
+                if old is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = old
+
+        def _build_decoder() -> VideoDecoder:
+            return (
+                self.vae_decoder_builder.build(device=self._target_device(), dtype=self.dtype)
+                .to(self.device)
+                .eval()
+            )
+
+        # If user forces timestep conditioning on but the checkpoint doesn't contain the extra weights,
+        # fall back to building without it instead of crashing.
+        decoder: VideoDecoder
+        try:
+            decoder = _build_decoder()
+        except RuntimeError as e:
+            raw = os.environ.get("LTX_VAE_TIMESTEP_CONDITIONING")
+            if raw is not None and raw.strip().lower() in {"1", "true", "t", "yes", "y", "on"}:
+                logging.warning(
+                    "Failed to build VAE decoder with timestep conditioning enabled "
+                    "(likely missing weights in checkpoint). Falling back to timestep conditioning disabled. "
+                    "Original error: %s",
+                    str(e),
+                )
+                with _temp_env("LTX_VAE_TIMESTEP_CONDITIONING", "false"):
+                    decoder = _build_decoder()
+            else:
+                raise
 
         if (vae_noise_scale := os.environ.get("LTX_VAE_DECODE_NOISE_SCALE")) is not None:
             decoder.decode_noise_scale = float(vae_noise_scale)
