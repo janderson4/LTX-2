@@ -1,3 +1,5 @@
+import os
+
 import torch
 
 from ltx_core.components.patchifiers import get_pixel_coords
@@ -36,7 +38,8 @@ class VideoConditionByKeyframeIndex(ConditioningItem):
 
         positions[:, 0, ...] += self.frame_idx
         positions = positions.to(dtype=torch.float32)
-        positions[:, 0, ...] /= latent_tools.fps
+        rescale_factor = float(os.environ.get("LTX_FPS_RESCALE", "1.0"))
+        positions[:, 0, ...] /= (latent_tools.fps * rescale_factor)
 
         denoise_mask = torch.full(
             size=(*tokens.shape[:2], 1),

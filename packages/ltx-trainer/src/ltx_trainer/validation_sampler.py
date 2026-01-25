@@ -443,7 +443,8 @@ class ValidationSampler:
         latent_coords = self._video_patchifier.get_patch_grid_bounds(output_shape=latent_shape, device=device)
         positions = get_pixel_coords(latent_coords, scale_factors=VIDEO_SCALE_FACTORS, causal_fix=True)
         positions = positions.to(torch.bfloat16)
-        positions[:, 0, ...] = positions[:, 0, ...] / fps
+        rescale_factor = float(os.environ.get("LTX_FPS_RESCALE", "1.0"))
+        positions[:, 0, ...] = positions[:, 0, ...] / (fps * rescale_factor)
 
         return patchified, positions
 

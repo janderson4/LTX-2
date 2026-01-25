@@ -3,6 +3,7 @@ This module defines the abstract base class that all training strategies must im
 along with the base configuration class.
 """
 
+import os
 import random
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -169,7 +170,8 @@ class TrainingStrategy(ABC):
         ).to(dtype)
 
         # Scale temporal dimension by 1/fps to get time in seconds
-        pixel_coords[:, 0, ...] = pixel_coords[:, 0, ...] / fps
+        rescale_factor = float(os.environ.get("LTX_FPS_RESCALE", "1.0"))
+        pixel_coords[:, 0, ...] = pixel_coords[:, 0, ...] / (fps * rescale_factor)
 
         return pixel_coords
 

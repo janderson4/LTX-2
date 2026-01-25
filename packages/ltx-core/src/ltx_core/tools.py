@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass, replace
 from typing import Protocol
 
@@ -126,7 +127,8 @@ class VideoLatentTools(LatentTools):
             scale_factors=self.scale_factors,
             causal_fix=self.causal_fix,
         ).float()
-        positions[:, 0, ...] = positions[:, 0, ...] / self.fps
+        rescale_factor = float(os.environ.get("LTX_FPS_RESCALE", "1.0"))
+        positions[:, 0, ...] = positions[:, 0, ...] / (self.fps * rescale_factor)
 
         return self.patchify(
             LatentState(
