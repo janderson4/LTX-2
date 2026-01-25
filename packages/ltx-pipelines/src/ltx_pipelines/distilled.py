@@ -22,7 +22,6 @@ from ltx_pipelines.utils.args import default_2_stage_distilled_arg_parser
 from ltx_pipelines.utils.constants import (
     AUDIO_SAMPLE_RATE,
     DISTILLED_SIGMA_VALUES,
-    STAGE_2_DISTILLED_SIGMA_VALUES,
 )
 from ltx_pipelines.utils.helpers import (
     assert_resolution,
@@ -59,6 +58,8 @@ class DistilledPipeline:
         self.device = device
         self.dtype = torch.bfloat16
         self.is_video_only = os.environ.get("VIDEO_ONLY", "false").lower() == "true"
+        if self.is_video_only:
+            logging.info("Running in VIDEO_ONLY mode. Skipping all audio and audio-visual cross-attention.")
 
         self.model_ledger = ModelLedger(
             dtype=self.dtype,
@@ -223,7 +224,9 @@ class DistilledPipeline:
             # Skip the second denoising pass and use the upscaled latent directly.
             video_state = replace(video_state, latent=upscaled_video_latent)
         else:
-            stage_2_sigmas = torch.Tensor(STAGE_2_DISTILLED_SIGMA_VALUES).to(self.device)
+            num_stage2_steps = int(os.environ.get("NUM_STAGE2_STEPS", "3"))
+            stage_2_sigmas = DISTILLED_SIGMA_VALUES[-(num_stage2_steps + 1) :]
+            stage_2_sigmas = torch.Tensor(stage_2_sigmas).to(self.device)
             video_state, audio_state = denoise_audio_video(
                 output_shape=stage_2_output_shape,
                 conditionings=stage_2_conditionings,

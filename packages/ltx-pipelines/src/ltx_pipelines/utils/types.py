@@ -1,3 +1,4 @@
+import os
 from typing import Protocol
 
 import torch
@@ -32,7 +33,12 @@ class PipelineComponents:
         self.video_latent_channels = VIDEO_LATENT_CHANNELS
 
         self.video_patchifier = VideoLatentPatchifier(patch_size=1)
-        self.audio_patchifier = AudioPatchifier(patch_size=1)
+        
+        # Skip audio patchifier in video-only mode
+        if os.environ.get("VIDEO_ONLY", "false").lower() == "true":
+            self.audio_patchifier = None
+        else:
+            self.audio_patchifier = AudioPatchifier(patch_size=1)
 
 
 class DenoisingFunc(Protocol):
