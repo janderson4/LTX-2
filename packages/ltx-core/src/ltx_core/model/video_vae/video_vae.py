@@ -874,6 +874,31 @@ def decode_video(
         frames = rearrange(frames[0], "c f h w -> f h w c")
         return frames
 
+    # Optional: add pre-decode noise to all latent frames except the conditioning frame (latent index 0).
+    # This is independent of (and runs even without) any timestep-conditioning logic in the decoder.
+    #
+    # scale=0.0 -> no change
+    # scale=1.0 -> replace non-conditioning latents with pure noise
+    if (raw_pre_noise := os.environ.get("LTX_VAE_DECODE_PRE_NOISE_SCALE")) is not None:
+        try:
+            scale = float(raw_pre_noise)
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid value for LTX_VAE_DECODE_PRE_NOISE_SCALE=%r (expected float in [0, 1]).",
+                raw_pre_noise,
+            )
+            scale = 0.0
+        scale = max(0.0, min(1.0, scale))
+        if scale > 0.0 and latent.shape[2] > 1:
+            latent = latent.clone()
+            noise = torch.randn(
+                latent[:, :, 1:, :, :].shape,
+                generator=generator,
+                dtype=latent.dtype,
+                device=latent.device,
+            )
+            latent[:, :, 1:, :, :] = (1.0 - scale) * latent[:, :, 1:, :, :] + scale * noise
+
     # Optional: bias decoding to preserve details from the conditioning frame (latent index 0)
     # by blending all later latents toward it before decoding.
     #
