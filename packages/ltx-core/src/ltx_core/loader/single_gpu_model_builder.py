@@ -64,8 +64,15 @@ class SingleGPUModelBuilder(Generic[ModelType], ModelBuilderProtocol[ModelType],
         uninitialized_params = [name for name, param in meta_model.named_parameters() if str(param.device) == "meta"]
         uninitialized_buffers = [name for name, buffer in meta_model.named_buffers() if str(buffer.device) == "meta"]
         if uninitialized_params or uninitialized_buffers:
-            logger.warning(f"Uninitialized parameters or buffers: {uninitialized_params + uninitialized_buffers}")
-            return meta_model
+            missing = uninitialized_params + uninitialized_buffers
+            raise RuntimeError(
+                "ModelBuilder produced a module with uninitialized (meta) tensors after loading weights. "
+                "This usually means the checkpoint is missing keys for the requested architecture "
+                "(e.g. enabling VAE decoder timestep conditioning adds extra parameters). "
+                f"Missing meta tensors: {missing}. "
+                "Fix: use a checkpoint that contains those weights, or disable the feature that adds them "
+                "(for VAE decoder timestep conditioning, set LTX_VAE_TIMESTEP_CONDITIONING=false)."
+            )
         retval = meta_model.to(device)
         return retval
 
