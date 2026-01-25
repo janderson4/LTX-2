@@ -1,5 +1,6 @@
 import gc
 import logging
+import os
 from dataclasses import replace
 
 import torch
@@ -18,12 +19,29 @@ from ltx_core.text_encoders.gemma import GemmaTextEncoderModelBase
 from ltx_core.tools import AudioLatentTools, LatentTools, VideoLatentTools
 from ltx_core.types import AudioLatentShape, LatentState, VideoLatentShape, VideoPixelShape
 from ltx_core.utils import to_denoised, to_velocity
+from ltx_pipelines.utils.constants import DEFAULT_IMAGE_CRF
 from ltx_pipelines.utils.media_io import decode_image, load_image_conditioning, resize_aspect_ratio_preserving
 from ltx_pipelines.utils.types import (
     DenoisingFunc,
     DenoisingLoopFunc,
     PipelineComponents,
 )
+
+def _env_flag(name: str, default: str = "false") -> bool:
+    return os.environ.get(name, default).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _preprocess_first_frame_enabled() -> bool:
+    return _env_flag("PREPROCESS_FIRST_FRAME", "false")
+
+
+def _preprocess_first_frame_crf() -> float:
+    raw = os.environ.get("PREPROCESS_FIRST_FRAME_CRF", str(DEFAULT_IMAGE_CRF)).strip()
+    try:
+        return float(raw)
+    except ValueError:
+        logging.warning(f"Invalid PREPROCESS_FIRST_FRAME_CRF={raw!r}; falling back to {DEFAULT_IMAGE_CRF}.")
+        return float(DEFAULT_IMAGE_CRF)
 
 
 def get_device() -> torch.device:
@@ -48,12 +66,15 @@ def image_conditionings_by_replacing_latent(
 ) -> list[ConditioningItem]:
     conditionings = []
     for image_path, frame_idx, strength in images:
+        apply_preprocess = _preprocess_first_frame_enabled() and frame_idx == 0
         image = load_image_conditioning(
             image_path=image_path,
             height=height,
             width=width,
             dtype=dtype,
             device=device,
+            apply_preprocess=apply_preprocess,
+            preprocess_crf=_preprocess_first_frame_crf(),
         )
         encoded_image = video_encoder(image)
         conditionings.append(
@@ -77,12 +98,15 @@ def image_conditionings_by_adding_guiding_latent(
 ) -> list[ConditioningItem]:
     conditionings = []
     for image_path, frame_idx, strength in images:
+        apply_preprocess = _preprocess_first_frame_enabled() and frame_idx == 0
         image = load_image_conditioning(
             image_path=image_path,
             height=height,
             width=width,
             dtype=dtype,
             device=device,
+            apply_preprocess=apply_preprocess,
+            preprocess_crf=_preprocess_first_frame_crf(),
         )
         encoded_image = video_encoder(image)
         conditionings.append(

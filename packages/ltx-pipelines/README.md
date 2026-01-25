@@ -25,6 +25,11 @@ LTX-2 Pipelines provides production-ready implementations that abstract away the
 
 `ltx-pipelines` provides ready-made inference pipelines for text-to-video, image-to-video, video-to-video, and keyframe interpolation. Built using building blocks from [`ltx-core`](../ltx-core/), these pipelines handle the complete inference flow including model loading, encoding, decoding, and file I/O.
 
+### Environment Variables
+
+- **`PREPROCESS_FIRST_FRAME`**: When set to a truthy value (`true`, `1`, `yes`, `on`), applies an H.264 encode→decode preprocessing step (libx264, `preset=veryfast`) to the **frame-0 image conditioning input**. This can add “natural” compression artifacts that often help induce motion for image-to-video.
+- **`PREPROCESS_FIRST_FRAME_CRF`**: Optional numeric CRF value for the preprocessing step (default: `33`). Higher values generally increase compression artifacts (e.g. try `40`).
+
 ## 🔧 Installation
 
 ```bash
