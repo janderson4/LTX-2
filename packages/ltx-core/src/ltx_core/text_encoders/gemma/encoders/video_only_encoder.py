@@ -79,7 +79,7 @@ class VideoGemmaTextEncoderModelConfigurator(ModelConfigurator[VideoGemmaTextEnc
 VIDEO_ONLY_GEMMA_TEXT_ENCODER_KEY_OPS = (
     SDOps("VIDEO_ONLY_GEMMA_TEXT_ENCODER_KEY_OPS")
     .with_matching(prefix="text_embedding_projection.")
-    .with_matching(prefix="model.diffusion_model.embeddings_connector.")
+    .with_matching(prefix="model.diffusion_model.video_embeddings_connector.")
     .with_replacement("text_embedding_projection.", "feature_extractor_linear.")
-    .with_replacement("model.diffusion_model.embeddings_connector.", "embeddings_connector.")
+    .with_replacement("model.diffusion_model.video_embeddings_connector.", "embeddings_connector.")
 )
