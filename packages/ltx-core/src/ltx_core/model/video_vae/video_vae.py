@@ -526,6 +526,9 @@ class VideoDecoder(nn.Module):
         sample: torch.Tensor,
         timestep: torch.Tensor | None = None,
         generator: torch.Generator | None = None,
+        *,
+        latent_t_start: int = 0,
+        conditioning_latent_idx: int = 0,
     ) -> torch.Tensor:
         r"""
         Decode latent representation into video frames.
@@ -541,19 +544,48 @@ class VideoDecoder(nn.Module):
         """
         batch_size = sample.shape[0]
 
-        # Add noise if timestep conditioning is enabled
-        if self.timestep_conditioning:
-            noise = (
-                torch.randn(
-                    sample.size(),
-                    generator=generator,
-                    dtype=sample.dtype,
-                    device=sample.device,
-                )
-                * self.decode_noise_scale
-            )
+        # Add noise if timestep conditioning is enabled.
+        # Important: we skip the global "conditioning" latent frame (default: latent index 0),
+        # so fine details from that frame are preserved.
+        if self.timestep_conditioning and self.decode_noise_scale > 0.0:
+            num_latent_frames = sample.shape[2]
+            cond_local_idx = conditioning_latent_idx - latent_t_start
 
-            sample = noise + (1.0 - self.decode_noise_scale) * sample
+            # Fast path: tile doesn't include the conditioning frame, so noise all frames.
+            if cond_local_idx < 0 or cond_local_idx >= num_latent_frames:
+                noise = (
+                    torch.randn(
+                        sample.size(),
+                        generator=generator,
+                        dtype=sample.dtype,
+                        device=sample.device,
+                    )
+                    * self.decode_noise_scale
+                )
+                sample = noise + (1.0 - self.decode_noise_scale) * sample
+            # Tile includes the conditioning frame: noise every frame except that one.
+            elif num_latent_frames > 1:
+                sample = sample.clone()
+
+                def noise_and_mix(view: torch.Tensor) -> torch.Tensor:
+                    noise = (
+                        torch.randn(
+                            view.size(),
+                            generator=generator,
+                            dtype=view.dtype,
+                            device=view.device,
+                        )
+                        * self.decode_noise_scale
+                    )
+                    return noise + (1.0 - self.decode_noise_scale) * view
+
+                # Noise frames before/after the conditioning frame, leaving it untouched.
+                if cond_local_idx > 0:
+                    sample[:, :, :cond_local_idx, :, :] = noise_and_mix(sample[:, :, :cond_local_idx, :, :])
+                if cond_local_idx < num_latent_frames - 1:
+                    sample[:, :, cond_local_idx + 1 :, :, :] = noise_and_mix(
+                        sample[:, :, cond_local_idx + 1 :, :, :]
+                    )
 
         # Denormalize latents
         sample = self.per_channel_statistics.un_normalize(sample)
@@ -781,7 +813,13 @@ class VideoDecoder(nn.Module):
         weights = torch.zeros_like(buffer)
 
         for tile in group_tiles:
-            decoded_tile = self.forward(latent[tile.in_coords], timestep, generator)
+            decoded_tile = self.forward(
+                latent[tile.in_coords],
+                timestep,
+                generator,
+                latent_t_start=tile.in_coords[2].start,
+                conditioning_latent_idx=0,
+            )
             mask = tile.blend_mask.to(device=buffer.device, dtype=buffer.dtype)
             temporal_offset = tile.out_coords[2].start - temporal_slice.start
             # Use the tile's output coordinate length, not the decoded tile's length,

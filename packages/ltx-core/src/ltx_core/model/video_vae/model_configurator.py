@@ -1,7 +1,22 @@
+import logging
+import os
+
 from ltx_core.loader.sd_ops import SDOps
 from ltx_core.model.model_protocol import ModelConfigurator
 from ltx_core.model.video_vae.enums import LogVarianceType, NormLayerType, PaddingModeType
 from ltx_core.model.video_vae.video_vae import VideoDecoder, VideoEncoder
+
+
+logger: logging.Logger = logging.getLogger(__name__)
+
+
+def _parse_env_bool(val: str) -> bool | None:
+    v = val.strip().lower()
+    if v in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if v in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return None
 
 
 class VideoEncoderConfigurator(ModelConfigurator[VideoEncoder]):
@@ -46,6 +61,18 @@ class VideoDecoderConfigurator(ModelConfigurator[VideoDecoder]):
         norm_layer_str = config.get("norm_layer", "pixel_norm")
         causal = config.get("causal_decoder", False)
         timestep_conditioning = config.get("timestep_conditioning", True)
+
+        # Allow runtime override of whether VAE decoder uses timestep conditioning.
+        # Note: This must happen at build-time because enabling it adds parameters/modules.
+        if (raw := os.environ.get("LTX_VAE_TIMESTEP_CONDITIONING")) is not None:
+            parsed = _parse_env_bool(raw)
+            if parsed is None:
+                logger.warning(
+                    "Ignoring invalid value for LTX_VAE_TIMESTEP_CONDITIONING=%r (expected true/false).",
+                    raw,
+                )
+            else:
+                timestep_conditioning = parsed
 
         return VideoDecoder(
             convolution_dimensions=convolution_dimensions,
