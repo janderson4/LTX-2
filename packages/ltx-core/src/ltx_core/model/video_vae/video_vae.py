@@ -1,3 +1,5 @@
+import logging
+import os
 from dataclasses import replace
 from typing import Any, Callable, Iterator, List, Tuple
 
@@ -24,6 +26,8 @@ from ltx_core.model.video_vae.tiling import (
     create_tiles,
 )
 from ltx_core.types import SpatioTemporalScaleFactors, VideoLatentShape
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 
 def _make_encoder_block(
@@ -869,6 +873,25 @@ def decode_video(
         frames = (((frames + 1.0) / 2.0).clamp(0.0, 1.0) * 255.0).to(torch.uint8)
         frames = rearrange(frames[0], "c f h w -> f h w c")
         return frames
+
+    # Optional: bias decoding to preserve details from the conditioning frame (latent index 0)
+    # by blending all later latents toward it before decoding.
+    #
+    # This is useful when the decoder does NOT support timestep conditioning / denoising, but you still
+    # want later frames to lean on the first frame's fine detail.
+    if (raw_blend := os.environ.get("LTX_VAE_DECODE_FIRST_LATENT_BLEND")) is not None:
+        try:
+            alpha = float(raw_blend)
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid value for LTX_VAE_DECODE_FIRST_LATENT_BLEND=%r (expected float in [0, 1]).",
+                raw_blend,
+            )
+            alpha = 0.0
+        alpha = max(0.0, min(1.0, alpha))
+        if alpha > 0.0 and latent.shape[2] > 1:
+            latent = latent.clone()
+            latent[:, :, 1:, :, :] = (1.0 - alpha) * latent[:, :, 1:, :, :] + alpha * latent[:, :, 0:1, :, :]
 
     if tiling_config is not None:
         for frames in video_decoder.tiled_decode(latent, tiling_config, generator=generator):
