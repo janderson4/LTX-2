@@ -227,6 +227,7 @@ class DistilledPipeline:
             num_stage2_steps = int(os.environ.get("NUM_STAGE2_STEPS", "3"))
             stage_2_sigmas = DISTILLED_SIGMA_VALUES[-(num_stage2_steps + 1) :]
             stage_2_sigmas = torch.Tensor(stage_2_sigmas).to(self.device)
+            noise_rescale = float(os.environ.get("STAGE2_ADD_NOISE_RESCALE", "1.0"))
             video_state, audio_state = denoise_audio_video(
                 output_shape=stage_2_output_shape,
                 conditionings=stage_2_conditionings,
@@ -237,7 +238,7 @@ class DistilledPipeline:
                 components=self.pipeline_components,
                 dtype=dtype,
                 device=self.device,
-                noise_scale=stage_2_sigmas[0],
+                noise_scale=stage_2_sigmas[0].item() * noise_rescale,
                 initial_video_latent=upscaled_video_latent,
                 initial_audio_latent=audio_state.latent if audio_state is not None else None,
             )
