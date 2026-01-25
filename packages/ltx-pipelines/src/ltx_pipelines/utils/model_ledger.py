@@ -21,6 +21,7 @@ from ltx_core.model.transformer import (
     LTXV_MODEL_COMFY_RENAMING_WITH_TRANSFORMER_LINEAR_DOWNCAST_MAP,
     UPCAST_DURING_INFERENCE,
     LTXModelConfigurator,
+    LTXVideoOnlyModelConfigurator,
     X0Model,
 )
 from ltx_core.model.upsampler import LatentUpsampler, LatentUpsamplerConfigurator
@@ -36,6 +37,8 @@ from ltx_core.text_encoders.gemma import (
     AV_GEMMA_TEXT_ENCODER_KEY_OPS,
     AVGemmaTextEncoderModel,
     AVGemmaTextEncoderModelConfigurator,
+    VIDEO_ONLY_GEMMA_TEXT_ENCODER_KEY_OPS,
+    VideoGemmaTextEncoderModelConfigurator,
     module_ops_from_gemma_root,
 )
 
@@ -96,6 +99,7 @@ class ModelLedger:
         loras: LoraPathStrengthAndSDOps | None = None,
         registry: Registry | None = None,
         fp8transformer: bool = False,
+        is_video_only: bool = False,
     ):
         self.dtype = dtype
         self.device = device
@@ -105,13 +109,17 @@ class ModelLedger:
         self.loras = loras or ()
         self.registry = registry or DummyRegistry()
         self.fp8transformer = fp8transformer
+        self.is_video_only = is_video_only
         self.build_model_builders()
 
     def build_model_builders(self) -> None:
         if self.checkpoint_path is not None:
+            transformer_configurator = (
+                LTXVideoOnlyModelConfigurator if self.is_video_only else LTXModelConfigurator
+            )
             self.transformer_builder = Builder(
                 model_path=self.checkpoint_path,
-                model_class_configurator=LTXModelConfigurator,
+                model_class_configurator=transformer_configurator,
                 model_sd_ops=LTXV_MODEL_COMFY_RENAMING_MAP,
                 loras=tuple(self.loras),
                 registry=self.registry,
@@ -131,25 +139,36 @@ class ModelLedger:
                 registry=self.registry,
             )
 
-            self.audio_decoder_builder = Builder(
-                model_path=self.checkpoint_path,
-                model_class_configurator=AudioDecoderConfigurator,
-                model_sd_ops=AUDIO_VAE_DECODER_COMFY_KEYS_FILTER,
-                registry=self.registry,
-            )
+            if not self.is_video_only:
+                self.audio_decoder_builder = Builder(
+                    model_path=self.checkpoint_path,
+                    model_class_configurator=AudioDecoderConfigurator,
+                    model_sd_ops=AUDIO_VAE_DECODER_COMFY_KEYS_FILTER,
+                    registry=self.registry,
+                )
 
-            self.vocoder_builder = Builder(
-                model_path=self.checkpoint_path,
-                model_class_configurator=VocoderConfigurator,
-                model_sd_ops=VOCODER_COMFY_KEYS_FILTER,
-                registry=self.registry,
-            )
+                self.vocoder_builder = Builder(
+                    model_path=self.checkpoint_path,
+                    model_class_configurator=VocoderConfigurator,
+                    model_sd_ops=VOCODER_COMFY_KEYS_FILTER,
+                    registry=self.registry,
+                )
 
             if self.gemma_root_path is not None:
+                text_configurator = (
+                    VideoGemmaTextEncoderModelConfigurator
+                    if self.is_video_only
+                    else AVGemmaTextEncoderModelConfigurator
+                )
+                text_sd_ops = (
+                    VIDEO_ONLY_GEMMA_TEXT_ENCODER_KEY_OPS
+                    if self.is_video_only
+                    else AV_GEMMA_TEXT_ENCODER_KEY_OPS
+                )
                 self.text_encoder_builder = Builder(
                     model_path=self.checkpoint_path,
-                    model_class_configurator=AVGemmaTextEncoderModelConfigurator,
-                    model_sd_ops=AV_GEMMA_TEXT_ENCODER_KEY_OPS,
+                    model_class_configurator=text_configurator,
+                    model_sd_ops=text_sd_ops,
                     registry=self.registry,
                     module_ops=module_ops_from_gemma_root(self.gemma_root_path),
                 )
@@ -177,6 +196,7 @@ class ModelLedger:
             loras=(*self.loras, *loras),
             registry=self.registry,
             fp8transformer=self.fp8transformer,
+            is_video_only=self.is_video_only,
         )
 
     def transformer(self) -> X0Model:

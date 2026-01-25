@@ -58,6 +58,7 @@ class DistilledPipeline:
     ):
         self.device = device
         self.dtype = torch.bfloat16
+        self.is_video_only = os.environ.get("VIDEO_ONLY", "false").lower() == "true"
 
         self.model_ledger = ModelLedger(
             dtype=self.dtype,
@@ -67,6 +68,7 @@ class DistilledPipeline:
             gemma_root_path=gemma_root,
             loras=loras,
             fp8transformer=fp8transformer,
+            is_video_only=self.is_video_only,
         )
 
         self.pipeline_components = PipelineComponents(
@@ -85,7 +87,7 @@ class DistilledPipeline:
         images: list[tuple[str, int, float]],
         tiling_config: TilingConfig | None = None,
         enhance_prompt: bool = False,
-    ) -> tuple[Iterator[torch.Tensor], torch.Tensor]:
+    ) -> tuple[Iterator[torch.Tensor], torch.Tensor | None]:
         assert_resolution(height=height, width=width, is_two_stage=True)
 
         generator = torch.Generator(device=self.device).manual_seed(seed)
@@ -121,7 +123,7 @@ class DistilledPipeline:
             video_state: LatentState,
             audio_state: LatentState,
             stepper: DiffusionStepProtocol,
-        ) -> tuple[LatentState, LatentState]:
+        ) -> tuple[LatentState, LatentState | None]:
             base_denoise_fn = simple_denoising_func(
                 video_context=video_context,
                 audio_context=audio_context,
@@ -234,7 +236,7 @@ class DistilledPipeline:
                 device=self.device,
                 noise_scale=stage_2_sigmas[0],
                 initial_video_latent=upscaled_video_latent,
-                initial_audio_latent=audio_state.latent,
+                initial_audio_latent=audio_state.latent if audio_state is not None else None,
             )
 
         torch.cuda.synchronize()
@@ -271,13 +273,15 @@ class DistilledPipeline:
             torch.cuda.synchronize()
             print(f"VAE video decoding: {time.perf_counter() - start_time:.4f}s")
 
-        torch.cuda.synchronize()
-        audio_start_time = time.perf_counter()
-        decoded_audio = vae_decode_audio(
-            audio_state.latent, self.model_ledger.audio_decoder(), self.model_ledger.vocoder()
-        )
-        torch.cuda.synchronize()
-        print(f"VAE audio decoding: {time.perf_counter() - audio_start_time:.4f}s")
+        decoded_audio = None
+        if not self.is_video_only and audio_state is not None:
+            torch.cuda.synchronize()
+            audio_start_time = time.perf_counter()
+            decoded_audio = vae_decode_audio(
+                audio_state.latent, self.model_ledger.audio_decoder(), self.model_ledger.vocoder()
+            )
+            torch.cuda.synchronize()
+            print(f"VAE audio decoding: {time.perf_counter() - audio_start_time:.4f}s")
         return decoded_video, decoded_audio
 
 

@@ -281,7 +281,12 @@ def encode_text(text_encoder: GemmaTextEncoderModelBase, prompts: list[str]) -> 
     """
     result = []
     for prompt in prompts:
-        v_context, a_context, _ = text_encoder(prompt)
+        out = text_encoder(prompt)
+        if hasattr(out, "audio_encoding"):
+            v_context, a_context, _ = out
+        else:
+            v_context, _ = out
+            a_context = None
         result.append((v_context, a_context))
     return result
 

@@ -121,7 +121,7 @@ def euler_denoising_loop(
     audio_state: LatentState,
     stepper: DiffusionStepProtocol,
     denoise_fn: DenoisingFunc,
-) -> tuple[LatentState, LatentState]:
+) -> tuple[LatentState, LatentState | None]:
     """
     Perform the joint audio-video denoising loop over a diffusion schedule.
     This function iterates over all but the final value in ``sigmas`` and, at
@@ -149,7 +149,7 @@ def euler_denoising_loop(
         return a tuple ``(denoised_video, denoised_audio)``, where each element
         is a tensor with the same shape as the corresponding latent.
     ### Returns
-    tuple[LatentState, LatentState]
+    tuple[LatentState, LatentState | None]
         A pair ``(video_state, audio_state)`` containing the final video and
         audio latent states after completing the denoising loop.
     """
@@ -157,10 +157,13 @@ def euler_denoising_loop(
         denoised_video, denoised_audio = denoise_fn(video_state, audio_state, sigmas, step_idx)
 
         denoised_video = post_process_latent(denoised_video, video_state.denoise_mask, video_state.clean_latent)
-        denoised_audio = post_process_latent(denoised_audio, audio_state.denoise_mask, audio_state.clean_latent)
-
         video_state = replace(video_state, latent=stepper.step(video_state.latent, denoised_video, sigmas, step_idx))
-        audio_state = replace(audio_state, latent=stepper.step(audio_state.latent, denoised_audio, sigmas, step_idx))
+
+        if audio_state is not None and denoised_audio is not None:
+            denoised_audio = post_process_latent(denoised_audio, audio_state.denoise_mask, audio_state.clean_latent)
+            audio_state = replace(
+                audio_state, latent=stepper.step(audio_state.latent, denoised_audio, sigmas, step_idx)
+            )
 
     return (video_state, audio_state)
 
@@ -331,11 +334,14 @@ def post_process_latent(denoised: torch.Tensor, denoise_mask: torch.Tensor, clea
 
 def modality_from_latent_state(
     state: LatentState, context: torch.Tensor, sigma: float | torch.Tensor, enabled: bool = True
-) -> Modality:
+) -> Modality | None:
     """Create a Modality from a latent state.
     Constructs a Modality object with the latent state's data, timesteps derived
     from the denoise mask and sigma, positions, and the provided context.
     """
+    if state is None or context is None:
+        return None
+
     return Modality(
         enabled=enabled,
         latent=state.latent,
@@ -359,7 +365,7 @@ def simple_denoising_func(
 ) -> DenoisingFunc:
     def simple_denoising_step(
         video_state: LatentState, audio_state: LatentState, sigmas: torch.Tensor, step_index: int
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         sigma = sigmas[step_index]
         pos_video = modality_from_latent_state(video_state, video_context, sigma)
         pos_audio = modality_from_latent_state(audio_state, audio_context, sigma)
@@ -380,7 +386,7 @@ def guider_denoising_func(
 ) -> DenoisingFunc:
     def guider_denoising_step(
         video_state: LatentState, audio_state: LatentState, sigmas: torch.Tensor, step_index: int
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         sigma = sigmas[step_index]
         pos_video = modality_from_latent_state(video_state, v_context_p, sigma)
         pos_audio = modality_from_latent_state(audio_state, a_context_p, sigma)
@@ -393,7 +399,8 @@ def guider_denoising_func(
             neg_denoised_video, neg_denoised_audio = transformer(video=neg_video, audio=neg_audio, perturbations=None)
 
             denoised_video = denoised_video + guider.delta(denoised_video, neg_denoised_video)
-            denoised_audio = denoised_audio + guider.delta(denoised_audio, neg_denoised_audio)
+            if denoised_audio is not None and neg_denoised_audio is not None:
+                denoised_audio = denoised_audio + guider.delta(denoised_audio, neg_denoised_audio)
 
         return denoised_video, denoised_audio
 
@@ -413,7 +420,7 @@ def denoise_audio_video(  # noqa: PLR0913
     noise_scale: float = 1.0,
     initial_video_latent: torch.Tensor | None = None,
     initial_audio_latent: torch.Tensor | None = None,
-) -> tuple[LatentState, LatentState]:
+) -> tuple[LatentState, LatentState | None]:
     video_state, video_tools = noise_video_state(
         output_shape=output_shape,
         noiser=noiser,
@@ -424,16 +431,25 @@ def denoise_audio_video(  # noqa: PLR0913
         noise_scale=noise_scale,
         initial_latent=initial_video_latent,
     )
-    audio_state, audio_tools = noise_audio_state(
-        output_shape=output_shape,
-        noiser=noiser,
-        conditionings=[],
-        components=components,
-        dtype=dtype,
-        device=device,
-        noise_scale=noise_scale,
-        initial_latent=initial_audio_latent,
-    )
+
+    audio_state, audio_tools = None, None
+    # Only noise audio if we're not in a video-only mode where components might be missing.
+    # We check if audio_patchifier is available in components.
+    if hasattr(components, "audio_patchifier") and components.audio_patchifier is not None:
+        try:
+            audio_state, audio_tools = noise_audio_state(
+                output_shape=output_shape,
+                noiser=noiser,
+                conditionings=[],
+                components=components,
+                dtype=dtype,
+                device=device,
+                noise_scale=noise_scale,
+                initial_latent=initial_audio_latent,
+            )
+        except Exception:
+            # Fallback if audio state cannot be created (e.g. missing components)
+            pass
 
     video_state, audio_state = denoising_loop_fn(
         sigmas,
@@ -444,8 +460,10 @@ def denoise_audio_video(  # noqa: PLR0913
 
     video_state = video_tools.clear_conditioning(video_state)
     video_state = video_tools.unpatchify(video_state)
-    audio_state = audio_tools.clear_conditioning(audio_state)
-    audio_state = audio_tools.unpatchify(audio_state)
+
+    if audio_state is not None and audio_tools is not None:
+        audio_state = audio_tools.clear_conditioning(audio_state)
+        audio_state = audio_tools.unpatchify(audio_state)
 
     return video_state, audio_state
 
