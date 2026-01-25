@@ -210,6 +210,14 @@ class ModelLedger:
 
         if (vae_noise_scale := os.environ.get("LTX_VAE_DECODE_NOISE_SCALE")) is not None:
             decoder.decode_noise_scale = float(vae_noise_scale)
+            if not decoder.timestep_conditioning:
+                logging.warning(
+                    "LTX_VAE_DECODE_NOISE_SCALE is set but timestep_conditioning is False in the VAE decoder. "
+                    "Noise will not be added."
+                )
+
+        if (vae_decode_timestep := os.environ.get("LTX_VAE_DECODE_TIMESTEP")) is not None:
+            decoder.decode_timestep = float(vae_decode_timestep)
 
         if (vae_causal := os.environ.get("LTX_VAE_CAUSAL_DECODE")) is not None:
             decoder.causal = vae_causal.lower() == "true"

@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+import os
 
 import torch
 
@@ -110,11 +111,27 @@ def load_video_vae_decoder(
     from ltx_core.loader.single_gpu_model_builder import SingleGPUModelBuilder
     from ltx_core.model.video_vae import VAE_DECODER_COMFY_KEYS_FILTER, VideoDecoderConfigurator
 
-    return SingleGPUModelBuilder(
+    decoder = SingleGPUModelBuilder(
         model_path=str(checkpoint_path),
         model_class_configurator=VideoDecoderConfigurator,
         model_sd_ops=VAE_DECODER_COMFY_KEYS_FILTER,
     ).build(device=_to_torch_device(device), dtype=dtype)
+
+    if (vae_noise_scale := os.environ.get("LTX_VAE_DECODE_NOISE_SCALE")) is not None:
+        decoder.decode_noise_scale = float(vae_noise_scale)
+        if not decoder.timestep_conditioning:
+            logger.warning(
+                "LTX_VAE_DECODE_NOISE_SCALE is set but timestep_conditioning is False in the VAE decoder. "
+                "Noise will not be added."
+            )
+
+    if (vae_decode_timestep := os.environ.get("LTX_VAE_DECODE_TIMESTEP")) is not None:
+        decoder.decode_timestep = float(vae_decode_timestep)
+
+    if (vae_causal := os.environ.get("LTX_VAE_CAUSAL_DECODE")) is not None:
+        decoder.causal = vae_causal.lower() == "true"
+
+    return decoder
 
 
 def load_audio_vae_encoder(
