@@ -9,6 +9,7 @@ Basic usage:
         --model-source /path/to/ltx2.safetensors
 """
 
+import os
 from pathlib import Path
 
 import torch
@@ -33,10 +34,10 @@ from ltx_trainer import logger
 from ltx_trainer.model_loader import load_audio_vae_decoder, load_video_vae_decoder, load_vocoder
 from ltx_trainer.video_utils import save_video
 
-DEFAULT_TILE_SIZE_PIXELS = 512  # Spatial tile size in pixels (must be ≥64 and divisible by 32)
-DEFAULT_TILE_OVERLAP_PIXELS = 128  # Spatial tile overlap in pixels (must be divisible by 32)
-DEFAULT_TILE_SIZE_FRAMES = 128  # Temporal tile size in frames (must be ≥16 and divisible by 8)
-DEFAULT_TILE_OVERLAP_FRAMES = 24  # Temporal tile overlap in frames (must be divisible by 8)
+DEFAULT_TILE_SIZE_PIXELS = int(os.environ.get("LTX_VAE_TILE_SIZE_SPATIAL", 512))
+DEFAULT_TILE_OVERLAP_PIXELS = int(os.environ.get("LTX_VAE_TILE_OVERLAP_SPATIAL", 128))
+DEFAULT_TILE_SIZE_FRAMES = int(os.environ.get("LTX_VAE_TILE_SIZE_TEMPORAL", 128))
+DEFAULT_TILE_OVERLAP_FRAMES = int(os.environ.get("LTX_VAE_TILE_OVERLAP_TEMPORAL", 24))
 
 disable_progress_bar()
 console = Console()

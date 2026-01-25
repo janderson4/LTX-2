@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from collections.abc import Iterator
 from dataclasses import replace
 
@@ -102,24 +103,46 @@ class DistilledPipeline:
         del text_encoder
         cleanup_memory()
 
+        # Prepare latent indices for conditioning. The input images use pixel indices,
+        # but the latent space is temporally downsampled.
+        t_scale = self.pipeline_components.video_scale_factors.time
+        latent_images = []
+        for path, pixel_idx, strength in images:
+            latent_idx = pixel_idx // t_scale
+            latent_images.append((path, latent_idx, strength))
+
         # Stage 1: Initial low resolution video generation.
         video_encoder = self.model_ledger.video_encoder()
         transformer = self.model_ledger.transformer()
         stage_1_sigmas = torch.Tensor(DISTILLED_SIGMA_VALUES).to(self.device)
 
         def denoising_loop(
-            sigmas: torch.Tensor, video_state: LatentState, audio_state: LatentState, stepper: DiffusionStepProtocol
+            sigmas: torch.Tensor,
+            video_state: LatentState,
+            audio_state: LatentState,
+            stepper: DiffusionStepProtocol,
         ) -> tuple[LatentState, LatentState]:
+            base_denoise_fn = simple_denoising_func(
+                video_context=video_context,
+                audio_context=audio_context,
+                transformer=transformer,  # noqa: F821
+            )
+
+            def timed_denoise_fn(vs, as_, s, step_idx):
+                torch.cuda.synchronize()
+                start_time = time.perf_counter()
+                res = base_denoise_fn(vs, as_, s, step_idx)
+                torch.cuda.synchronize()
+                end_time = time.perf_counter()
+                print(f"Diffusion step {step_idx}: {end_time - start_time:.4f}s")
+                return res
+
             return euler_denoising_loop(
                 sigmas=sigmas,
                 video_state=video_state,
                 audio_state=audio_state,
                 stepper=stepper,
-                denoise_fn=simple_denoising_func(
-                    video_context=video_context,
-                    audio_context=audio_context,
-                    transformer=transformer,  # noqa: F821
-                ),
+                denoise_fn=timed_denoise_fn,
             )
 
         stage_1_output_shape = VideoPixelShape(
@@ -129,14 +152,19 @@ class DistilledPipeline:
             height=height // 2,
             fps=frame_rate,
         )
+
+        torch.cuda.synchronize()
+        start_time = time.perf_counter()
         stage_1_conditionings = image_conditionings_by_replacing_latent(
-            images=images,
+            images=latent_images,
             height=stage_1_output_shape.height,
             width=stage_1_output_shape.width,
             video_encoder=video_encoder,
             dtype=dtype,
             device=self.device,
         )
+        torch.cuda.synchronize()
+        print(f"Stage 1 VAE encoding: {time.perf_counter() - start_time:.4f}s")
 
         video_state, audio_state = denoise_audio_video(
             output_shape=stage_1_output_shape,
@@ -151,28 +179,37 @@ class DistilledPipeline:
         )
 
         # Stage 2: Upsample and refine the video at higher resolution with distilled LORA.
+        torch.cuda.synchronize()
+        start_time = time.perf_counter()
         upscaled_video_latent = upsample_video(
             latent=video_state.latent[:1],
             video_encoder=video_encoder,
             upsampler=self.model_ledger.spatial_upsampler(),
         )
+        torch.cuda.synchronize()
+        print(f"VAE upscaling: {time.perf_counter() - start_time:.4f}s")
 
         stage_2_output_shape = VideoPixelShape(
             batch=1, frames=num_frames, width=width, height=height, fps=frame_rate
         )
+        torch.cuda.synchronize()
+        start_time = time.perf_counter()
         stage_2_conditionings = image_conditionings_by_replacing_latent(
-            images=images,
+            images=latent_images,
             height=stage_2_output_shape.height,
             width=stage_2_output_shape.width,
             video_encoder=video_encoder,
             dtype=dtype,
             device=self.device,
         )
+        torch.cuda.synchronize()
+        print(f"Stage 2 VAE encoding: {time.perf_counter() - start_time:.4f}s")
 
         # Replace conditioned frames in upscaled_video_latent with full resolution encoded latents.
         # This ensures that high-frequency details from the original images are preserved.
         for cond in stage_2_conditionings:
             if isinstance(cond, VideoConditionByLatentIndex):
+                # cond.latent_idx is already a latent index because we used latent_images
                 upscaled_video_latent[
                     :, :, cond.latent_idx : cond.latent_idx + 1
                 ] = cond.latent
@@ -206,15 +243,41 @@ class DistilledPipeline:
         cleanup_memory()
 
         vae_decoder = self.model_ledger.video_decoder()
-        if (vae_noise_scale := os.environ.get("LTX_VAE_DECODE_NOISE_SCALE")) is not None:
-            vae_decoder.decode_noise_scale = float(vae_noise_scale)
 
+        torch.cuda.synchronize()
+        start_time = time.perf_counter()
         decoded_video = vae_decode_video(
             video_state.latent, vae_decoder, tiling_config, generator
         )
+        # Note: vae_decode_video returns an Iterator if tiling is enabled, or a single tensor if not.
+        # We need to consume the iterator to measure full decoding time if tiling is used.
+        if tiling_config is not None:
+            # If it's an iterator, we'll need to wrap it to time individual chunk decodes if desired,
+            # or just time the whole process by converting to list or similar.
+            # But the return type of __call__ is (Iterator[torch.Tensor], torch.Tensor).
+            # To measure full time accurately while maintaining the generator pattern, 
+            # we might just time the first chunk or provide a wrapper.
+            # Let's wrap the decoded_video iterator if it is one.
+            def timed_iterator(it):
+                for i, val in enumerate(it):
+                    torch.cuda.synchronize()
+                    chunk_start = time.perf_counter()
+                    yield val
+                    torch.cuda.synchronize()
+                    print(f"VAE video decoding chunk {i}: {time.perf_counter() - chunk_start:.4f}s")
+            
+            decoded_video = timed_iterator(decoded_video)
+        else:
+            torch.cuda.synchronize()
+            print(f"VAE video decoding: {time.perf_counter() - start_time:.4f}s")
+
+        torch.cuda.synchronize()
+        audio_start_time = time.perf_counter()
         decoded_audio = vae_decode_audio(
             audio_state.latent, self.model_ledger.audio_decoder(), self.model_ledger.vocoder()
         )
+        torch.cuda.synchronize()
+        print(f"VAE audio decoding: {time.perf_counter() - audio_start_time:.4f}s")
         return decoded_video, decoded_audio
 
 

@@ -1,5 +1,6 @@
 from dataclasses import replace
 
+import os
 import torch
 
 from ltx_core.loader.primitives import LoraPathStrengthAndSDOps
@@ -201,7 +202,19 @@ class ModelLedger:
                 "Video decoder not initialized. Please provide a checkpoint path to the ModelLedger constructor."
             )
 
-        return self.vae_decoder_builder.build(device=self._target_device(), dtype=self.dtype).to(self.device).eval()
+        decoder = (
+            self.vae_decoder_builder.build(device=self._target_device(), dtype=self.dtype)
+            .to(self.device)
+            .eval()
+        )
+
+        if (vae_noise_scale := os.environ.get("LTX_VAE_DECODE_NOISE_SCALE")) is not None:
+            decoder.decode_noise_scale = float(vae_noise_scale)
+
+        if (vae_causal := os.environ.get("LTX_VAE_CAUSAL_DECODE")) is not None:
+            decoder.causal = vae_causal.lower() == "true"
+
+        return decoder
 
     def video_encoder(self) -> VideoEncoder:
         if not hasattr(self, "vae_encoder_builder"):

@@ -6,6 +6,7 @@ using the new ltx-core components (VideoLatentTools, AudioLatentTools, LatentSta
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
+import os
 import torch
 from einops import rearrange
 from torch import Tensor
@@ -64,10 +65,10 @@ class TiledDecodingConfig:
     """
 
     enabled: bool = True  # Whether to use tiled decoding (enabled by default)
-    tile_size_pixels: int = 192  # Spatial tile size in pixels (must be ≥64 and divisible by 32)
-    tile_overlap_pixels: int = 64  # Spatial tile overlap in pixels (must be divisible by 32)
-    tile_size_frames: int = 48  # Temporal tile size in frames (must be ≥16 and divisible by 8)
-    tile_overlap_frames: int = 24  # Temporal tile overlap in frames (must be divisible by 8)
+    tile_size_pixels: int = int(os.environ.get("LTX_VAE_TILE_SIZE_SPATIAL", 192))
+    tile_overlap_pixels: int = int(os.environ.get("LTX_VAE_TILE_OVERLAP_SPATIAL", 64))
+    tile_size_frames: int = int(os.environ.get("LTX_VAE_TILE_SIZE_TEMPORAL", 48))
+    tile_overlap_frames: int = int(os.environ.get("LTX_VAE_TILE_OVERLAP_TEMPORAL", 24))
 
 
 @dataclass

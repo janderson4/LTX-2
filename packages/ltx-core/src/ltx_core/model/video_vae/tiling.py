@@ -1,4 +1,5 @@
 import itertools
+import os
 from dataclasses import dataclass
 from typing import Callable, List, NamedTuple, Tuple
 
@@ -106,9 +107,20 @@ class TilingConfig:
 
     @classmethod
     def default(cls) -> "TilingConfig":
+        tile_size_spatial = int(os.environ.get("LTX_VAE_TILE_SIZE_SPATIAL", 512))
+        tile_overlap_spatial = int(os.environ.get("LTX_VAE_TILE_OVERLAP_SPATIAL", 64))
+        tile_size_temporal = int(os.environ.get("LTX_VAE_TILE_SIZE_TEMPORAL", 64))
+        tile_overlap_temporal = int(os.environ.get("LTX_VAE_TILE_OVERLAP_TEMPORAL", 24))
+
         return cls(
-            spatial_config=SpatialTilingConfig(tile_size_in_pixels=512, tile_overlap_in_pixels=64),
-            temporal_config=TemporalTilingConfig(tile_size_in_frames=64, tile_overlap_in_frames=24),
+            spatial_config=SpatialTilingConfig(
+                tile_size_in_pixels=tile_size_spatial,
+                tile_overlap_in_pixels=tile_overlap_spatial,
+            ),
+            temporal_config=TemporalTilingConfig(
+                tile_size_in_frames=tile_size_temporal,
+                tile_overlap_in_frames=tile_overlap_temporal,
+            ),
         )
 
 
