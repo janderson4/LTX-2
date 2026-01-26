@@ -30,6 +30,7 @@ from ltx_pipelines.utils.helpers import (
     euler_denoising_loop,
     generate_enhanced_prompt,
     get_device,
+    image_conditionings_by_adding_guiding_latent,
     image_conditionings_by_replacing_latent,
     simple_denoising_func,
 )
@@ -205,6 +206,17 @@ class DistilledPipeline:
             dtype=dtype,
             device=self.device,
         )
+        if os.environ.get("STAGE2_USE_KEYFRAME_CONDITIONING", "false").lower() == "true":
+            keyframe_conditionings = image_conditionings_by_adding_guiding_latent(
+                images=latent_images,
+                height=stage_2_output_shape.height,
+                width=stage_2_output_shape.width,
+                video_encoder=video_encoder,
+                dtype=dtype,
+                device=self.device,
+            )
+            stage_2_conditionings.extend(keyframe_conditionings)
+
         torch.cuda.synchronize()
         print(f"Stage 2 VAE encoding: {time.perf_counter() - start_time:.4f}s")
 
